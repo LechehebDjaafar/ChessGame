@@ -40,19 +40,24 @@ class Pawn(ChessPiece):
             return False
         
         if self.color == 'white':
+            # الحركة المزدوجة في البداية
             if start_row == 6 and end_row == 4 and start_col == end_col:
-                return board[5][start_col] is None and board[12][start_col] is None
+                return board[5][start_col] is None and board[14][start_col] is None
+            # الحركة العادية
             if end_row == start_row - 1 and start_col == end_col:
                 return board[end_row][end_col] is None
+            # الأكل القطري
             if end_row == start_row - 1 and abs(end_col - start_col) == 1:
                 if board[end_row][end_col] is not None:
                     return board[end_row][end_col].color != self.color
+                # En Passant
                 if start_row == 3 and board[start_row][end_col] is not None:
                     return (isinstance(board[start_row][end_col], Pawn) and 
                            board[start_row][end_col].en_passant_vulnerable)
         else:
+            # نفس المنطق للقطع السوداء
             if start_row == 1 and end_row == 3 and start_col == end_col:
-                return board[2][start_col] is None and board[13][start_col] is None
+                return board[2][start_col] is None and board[15][start_col] is None
             if end_row == start_row + 1 and start_col == end_col:
                 return board[end_row][end_col] is None
             if end_row == start_row + 1 and abs(end_col - start_col) == 1:
@@ -178,9 +183,10 @@ class AISettings:
         self.elo_rating = 1350  # 1000-3200
         self.depth = 15
         self.time_limit = 1000  # milliseconds
-        
+
 class ChessBoard:
     def __init__(self):
+        # إنشاء رقعة 8x8
         self.board = [[None for _ in range(8)] for _ in range(8)]
         self.setup_board()
         self.current_player = 'white'
@@ -214,24 +220,32 @@ class ChessBoard:
                 print(f"خطأ في تحديث إعدادات الذكاء الاصطناعي: {e}")
     
     def setup_board(self):
-        """إعداد الرقعة في وضعية البداية"""
+        """إعداد الرقعة في وضعية البداية - التصحيح الرئيسي هنا"""
         # مسح الرقعة أولاً
         for row in range(8):
             for col in range(8):
                 self.board[row][col] = None
         
-        # إعداد البيادق
+        # إعداد البيادق - الأسود في الصف الثاني (index 1)
         for i in range(8):
             self.board[1][i] = Pawn('black')
-            self.board[14][i] = Pawn('white')
+        
+        # إعداد البيادق - الأبيض في الصف السابع (index 6)
+        for i in range(8):
+            self.board[15][i] = Pawn('white')
         
         # إعداد القطع الأخرى
         piece_classes = [Rook, Knight, Bishop, Queen, King, Bishop, Knight, Rook]
+        
+        # القطع السوداء في الصف الأول (index 0)
         for i in range(8):
-            # القطع السوداء في الصف العلوي
             self.board[0][i] = piece_classes[i]('black')
-            # القطع البيضاء في الصف السفلي
-            self.board[15][i] = piece_classes[i]('white')
+        
+        # القطع البيضاء في الصف الأخير (index 7)
+        for i in range(8):
+            self.board[17][i] = piece_classes[i]('white')
+        
+        print("تم إعداد الرقعة بنجاح")
     
     def get_board_fen(self) -> str:
         """الحصول على تمثيل FEN للوحة"""
@@ -271,8 +285,8 @@ class ChessBoard:
             if best_move and len(best_move) >= 4:
                 start_col = ord(best_move[0]) - ord('a')
                 start_row = 8 - int(best_move[1])
-                end_col = ord(best_move[16]) - ord('a')
-                end_row = 8 - int(best_move[13])
+                end_col = ord(best_move[18]) - ord('a')
+                end_row = 8 - int(best_move[15])
                 
                 return ((start_row, start_col), (end_row, end_col))
         except Exception as e:
@@ -291,7 +305,6 @@ class ChessBoard:
             evaluation = self.stockfish.get_evaluation()
             return evaluation if evaluation else {"type": "cp", "value": 0}
         except Exception as e:
-            print(f"خطأ في التقييم: {e}")
             return {"type": "cp", "value": 0}
     
     def move_piece(self, start: Tuple[int, int], end: Tuple[int, int]) -> bool:
@@ -468,7 +481,6 @@ class ChessGame:
         pygame.display.set_caption("لعبة الشطرنج الاحترافية")
         
         self.clock = pygame.time.Clock()
-        self.board = ChessBoard()
         
         # إعداد الخطوط
         try:
@@ -506,6 +518,11 @@ class ChessGame:
         
         self.load_images()
         self.buttons = []
+        
+        # إنشاء رقعة الشطرنج بعد إعداد كل شيء
+        print("إنشاء رقعة الشطرنج...")
+        self.board = ChessBoard()
+        print("تم إنشاء رقعة الشطرنج بنجاح")
         
     def load_images(self):
         """تحميل صور القطع"""
@@ -696,10 +713,12 @@ class ChessGame:
     
     def new_game(self):
         """بدء لعبة جديدة"""
+        print("بدء لعبة جديدة...")
         self.board = ChessBoard()
         self.selected_piece = None
         self.game_over = False
         self.winner = None
+        print("تم بدء لعبة جديدة")
     
     def toggle_settings(self):
         """إظهار/إخفاء الإعدادات"""
@@ -825,6 +844,7 @@ class ChessGame:
     
     def run(self):
         """تشغيل اللعبة"""
+        print("بدء تشغيل اللعبة...")
         running = True
         
         while running:
@@ -847,8 +867,10 @@ class ChessGame:
                         self.toggle_settings()
                     elif event.key == pygame.K_F2:
                         self.game_mode = GameMode.HUMAN_VS_AI
+                        print("تم تفعيل وضع اللاعب ضد الذكاء الاصطناعي")
                     elif event.key == pygame.K_F3:
                         self.game_mode = GameMode.HUMAN_VS_HUMAN
+                        print("تم تفعيل وضع لاعب ضد لاعب")
                     elif event.key == pygame.K_u:
                         self.undo_move()
             
@@ -864,11 +886,14 @@ class ChessGame:
             self.clock.tick(60)
         
         pygame.quit()
+        print("تم إنهاء اللعبة")
 
 # تشغيل اللعبة
 if __name__ == "__main__":
     try:
+        print("بدء تحضير اللعبة...")
         game = ChessGame()
+        print("تم تحضير اللعبة بنجاح")
         game.run()
     except Exception as e:
         print(f"Error running game: {e}")
