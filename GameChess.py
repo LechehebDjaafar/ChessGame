@@ -28,13 +28,24 @@ class ProfessionalChessGame:
         self.game_result = None
         self.paused = False
         
-        # متغيرات الواجهة - تهيئة فارغة لتجنب الأخطاء
+        # متغيرات التنقل في التاريخ
+        self.move_history = []  # تاريخ كامل للحركات
+        self.current_position = 0  # الموقع الحالي في التاريخ
+        self.in_review_mode = False  # وضع مراجعة المباراة
+        
+        # متغيرات عرض الحركات القانونية
+        self.show_legal_moves = True
+        self.highlight_last_move = True
+        self.last_move = None
+        
+        # متغيرات الواجهة
         self.status_label = None
         self.canvas = None
         self.moves_count_label = None
         self.game_status_label = None
         self.board_orientation_label = None
         self.pgn_text = None
+        self.position_label = None
         
         # متغيرات الصور
         self.piece_images = {}
@@ -72,8 +83,18 @@ class ProfessionalChessGame:
         control_menu.add_command(label="↩️ تراجع", command=self.undo_move, accelerator="Ctrl+Z")
         control_menu.add_command(label="🔄 قلب الرقعة", command=self.flip_board_enhanced, accelerator="Ctrl+F")
         control_menu.add_separator()
-        control_menu.add_command(label="💡 إظهار الحركات الممكنة", command=self.toggle_show_moves)
+        control_menu.add_command(label="💡 إظهار الحركات القانونية", command=self.toggle_show_moves)
         control_menu.add_command(label="🎯 تمييز آخر حركة", command=self.toggle_highlight_last_move)
+        
+        # قائمة التنقل (جديدة)
+        navigation_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="⏭️ التنقل", menu=navigation_menu)
+        navigation_menu.add_command(label="⏪ البداية", command=self.go_to_start, accelerator="Home")
+        navigation_menu.add_command(label="◀️ السابق", command=self.go_previous, accelerator="Left")
+        navigation_menu.add_command(label="▶️ التالي", command=self.go_next, accelerator="Right")
+        navigation_menu.add_command(label="⏩ النهاية", command=self.go_to_end, accelerator="End")
+        navigation_menu.add_separator()
+        navigation_menu.add_command(label="🔄 وضع المراجعة", command=self.toggle_review_mode)
         
         # قائمة الملف
         file_menu = tk.Menu(menubar, tearoff=0)
@@ -95,6 +116,7 @@ class ProfessionalChessGame:
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="❓ مساعدة", menu=help_menu)
         help_menu.add_command(label="📖 قواعد الشطرنج", command=self.show_chess_rules)
+        help_menu.add_command(label="🎯 حركات القطع", command=self.show_piece_moves)
         help_menu.add_command(label="⌨️ اختصارات لوحة المفاتيح", command=self.show_keyboard_shortcuts)
         help_menu.add_separator()
         help_menu.add_command(label="ℹ️ حول البرنامج", command=self.show_about)
@@ -113,8 +135,208 @@ class ProfessionalChessGame:
         self.window.bind('<F1>', lambda e: self.show_chess_rules())
         self.window.bind('<Escape>', lambda e: self.return_to_menu())
         
-        # التركيز على النافذة لاستقبال الأحداث
+        # اختصارات التنقل في تاريخ المباراة
+        self.window.bind('<Left>', lambda e: self.go_previous())
+        self.window.bind('<Right>', lambda e: self.go_next())
+        self.window.bind('<Home>', lambda e: self.go_to_start())
+        self.window.bind('<End>', lambda e: self.go_to_end())
+        
+        # التركيز على النافذة
         self.window.focus_set()
+
+    # ================ دوال التنقل في تاريخ المباراة ================
+
+    def save_move_to_history(self, move):
+        """حفظ الحركة في التاريخ"""
+        if not self.in_review_mode:
+            # إضافة الحركة الجديدة إلى التاريخ
+            self.move_history.append({
+                'move': move,
+                'board_state': self.board.copy(),
+                'move_number': len(self.move_history) + 1
+            })
+            self.current_position = len(self.move_history)
+            self.last_move = move
+
+    def go_to_start(self):
+        """الذهاب إلى بداية المباراة"""
+        if not self.move_history:
+            return
+            
+        self.current_position = 0
+        self.board = chess.Board()  # رقعة فارغة
+        self.last_move = None
+        self.in_review_mode = True
+        self.update_board_display()
+
+    def go_previous(self):
+        """الحركة السابقة"""
+        if self.current_position > 0:
+            self.current_position -= 1
+            self.update_position_from_history()
+
+    def go_next(self):
+        """الحركة التالية"""
+        if self.current_position < len(self.move_history):
+            self.current_position += 1
+            self.update_position_from_history()
+
+    def go_to_end(self):
+        """الذهاب إلى نهاية المباراة"""
+        if not self.move_history:
+            return
+            
+        self.current_position = len(self.move_history)
+        self.update_position_from_history()
+        self.in_review_mode = False  # العودة لوضع اللعب العادي
+
+    def update_position_from_history(self):
+        """تحديث موقع الرقعة من التاريخ"""
+        if self.current_position == 0:
+            self.board = chess.Board()
+            self.last_move = None
+        else:
+            # إعادة بناء الرقعة حتى الموقع المحدد
+            self.board = chess.Board()
+            for i in range(self.current_position):
+                if i < len(self.move_history):
+                    self.board.push(self.move_history[i]['move'])
+                    if i == self.current_position - 1:
+                        self.last_move = self.move_history[i]['move']
+        
+        self.in_review_mode = (self.current_position < len(self.move_history))
+        self.update_board_display()
+
+    def update_board_display(self):
+        """تحديث عرض الرقعة"""
+        if self.canvas:
+            self.draw_enhanced_board()
+        self.update_status()
+        self.update_pgn_display()
+
+    def toggle_review_mode(self):
+        """تبديل وضع المراجعة"""
+        if self.in_review_mode:
+            self.go_to_end()  # العودة لنهاية المباراة
+        else:
+            self.in_review_mode = True
+        
+        message = "تم تفعيل وضع المراجعة" if self.in_review_mode else "تم إلغاء وضع المراجعة"
+        messagebox.showinfo("🔄 وضع المراجعة", f"🎯 {message}\n\nاستخدم الأسهم للتنقل في تاريخ المباراة!")
+
+    # ================ دوال عرض الحركات القانونية ================
+
+    def toggle_show_moves(self):
+        """تبديل إظهار الحركات القانونية"""
+        self.show_legal_moves = not self.show_legal_moves
+        if self.canvas:
+            self.draw_enhanced_board()
+        
+        status = "تم تفعيل" if self.show_legal_moves else "تم إلغاء"
+        messagebox.showinfo("💡 الحركات القانونية", f"{status} عرض الحركات القانونية!")
+
+    def toggle_highlight_last_move(self):
+        """تبديل تمييز آخر حركة"""
+        self.highlight_last_move = not self.highlight_last_move
+        if self.canvas:
+            self.draw_enhanced_board()
+        
+        status = "تم تفعيل" if self.highlight_last_move else "تم إلغاء"
+        messagebox.showinfo("🎯 تمييز الحركة", f"{status} تمييز آخر حركة!")
+
+    def get_legal_moves_for_square(self, square):
+        """الحصول على الحركات القانونية لمربع معين"""
+        legal_moves = []
+        for move in self.board.legal_moves:
+            if move.from_square == square:
+                legal_moves.append(move.to_square)
+        return legal_moves
+
+    def show_piece_moves(self):
+        """عرض نافذة حركات القطع"""
+        moves_window = tk.Toplevel(self.window)
+        moves_window.title("🎯 حركات قطع الشطرنج")
+        moves_window.geometry("700x600")
+        moves_window.configure(bg="#3B4252")
+        
+        moves_text = scrolledtext.ScrolledText(
+            moves_window,
+            bg="#434C5E", fg="#ECEFF4",
+            font=("Arial", 11),
+            wrap=tk.WORD
+        )
+        moves_text.pack(padx=20, pady=20, fill=tk.BOTH, expand=True)
+        
+        moves_content = """
+🎯 حركات قطع الشطرنج التفصيلية:
+
+♔ الملك (King):
+• يتحرك مربعاً واحداً في أي اتجاه (أفقي، عمودي، قطري)
+• هو أهم قطعة - لا يمكن أسره، وإذا تعرض للتهديد فهذا "كش"
+• له حركة خاصة تسمى "التبييت" مع الرخ
+• القيمة: لا تُقدر (أهم من كل شيء)
+
+♕ الملكة/الوزير (Queen):
+• تجمع حركات الرخ والفيل معاً
+• تتحرك أفقياً وعمودياً وقطرياً لأي عدد من المربعات
+• أقوى قطعة على الرقعة
+• القيمة: 9 نقاط
+
+♖ الرخ/القلعة (Rook):
+• يتحرك أفقياً وعمودياً لأي عدد من المربعات
+• لا يستطيع القفز فوق القطع الأخرى
+• له حركة خاصة تسمى "التبييت" مع الملك
+• القيمة: 5 نقاط
+
+♗ الفيل (Bishop):
+• يتحرك قطرياً فقط لأي عدد من المربعات
+• لا يستطيع القفز فوق القطع الأخرى
+• فيل المربعات البيضاء يبقى على البيضاء دائماً
+• فيل المربعات السوداء يبقى على السوداء دائماً
+• القيمة: 3 نقاط
+
+♘ الحصان (Knight):
+• يتحرك على شكل حرف "L"
+• مربعين في اتجاه ثم مربع واحد عمودياً عليه
+• القطعة الوحيدة التي تستطيع القفز فوق القطع الأخرى
+• دائماً ينتقل من مربع أبيض إلى أسود أو العكس
+• القيمة: 3 نقاط
+
+♙ البيدق (Pawn):
+• يتحرك للأمام مربعاً واحداً فقط
+• في أول حركة له يمكن أن يتحرك مربعين
+• يأسر قطرياً (ليس للأمام)
+• له حركات خاصة: "الأسر بالمرور" و "الترقية"
+• عند وصوله للصف الأخير يترقى لأي قطعة (عادة ملكة)
+• القيمة: 1 نقطة
+
+🎮 حركات خاصة:
+
+🏰 التبييت (Castling):
+• حركة خاصة بين الملك والرخ
+• الملك يتحرك مربعين نحو الرخ
+• الرخ ينتقل للجانب الآخر من الملك
+• شروط: لم يتحرك الملك أو الرخ من قبل، المربعات بينهما فارغة
+
+👻 الأسر بالمرور (En Passant):
+• حركة خاصة للبيدق
+• عندما يتحرك بيدق الخصم مربعين ويصبح بجانب بيدقك
+• يمكن أسره كأنه تحرك مربعاً واحداً فقط
+
+⬆️ ترقية البيدق (Pawn Promotion):
+• عندما يصل البيدق للصف الأخير
+• يجب ترقيته لقطعة أخرى (ملكة، رخ، فيل، أو حصان)
+• عادة يُرقى إلى ملكة لأنها الأقوى
+
+💡 نصائح مهمة:
+• لا يمكن تحريك قطعة إذا كان سيعرض ملكك للخطر
+• إذا كان ملكك في "كش" يجب إزالة التهديد فوراً
+• "كش مات" يعني أن الملك مهدد ولا يمكن إنقاذه
+• "تعادل" يحدث عندما لا توجد حركات قانونية والملك ليس في كش
+        """
+        
+        moves_text.insert(1.0, moves_content)
+        moves_text.configure(state=tk.DISABLED)
 
     def toggle_pause(self):
         """تبديل حالة الإيقاف المؤقت"""
@@ -129,7 +351,6 @@ class ProfessionalChessGame:
                 text="⏸️ المباراة متوقفة مؤقتاً - اضغط Space للاستئناف",
                 fg="#9B59B6"
             )
-            # إضافة تأثير بصري للإيقاف
             if self.canvas:
                 self.canvas.create_rectangle(
                     0, 0, self.canvas.winfo_reqwidth(), self.canvas.winfo_reqheight(),
@@ -140,14 +361,6 @@ class ProfessionalChessGame:
                 self.canvas.delete("pause_overlay")
             self.update_status()
 
-    def toggle_show_moves(self):
-        """تبديل إظهار الحركات الممكنة"""
-        messagebox.showinfo("قريباً", "هذه الميزة قيد التطوير!")
-
-    def toggle_highlight_last_move(self):
-        """تبديل تمييز آخر حركة"""
-        messagebox.showinfo("قريباً", "هذه الميزة قيد التطوير!")
-
     def show_game_stats(self):
         """عرض إحصائيات المباراة"""
         if not self.game_started:
@@ -156,13 +369,15 @@ class ProfessionalChessGame:
             
         stats_window = tk.Toplevel(self.window)
         stats_window.title("📊 إحصائيات المباراة")
-        stats_window.geometry("400x300")
+        stats_window.geometry("400x350")
         stats_window.configure(bg="#3B4252")
         
-        # حساب الإحصائيات
-        move_count = len(self.board.move_stack)
+        move_count = len(self.move_history)
         white_moves = (move_count + 1) // 2
         black_moves = move_count // 2
+        
+        # حساب القطع المأسورة
+        captured_pieces = self.get_captured_pieces_detailed()
         
         stats_text = f"""
 📊 إحصائيات المباراة الحالية:
@@ -178,16 +393,66 @@ class ProfessionalChessGame:
 
 ⚠️ كش: {'نعم' if self.board.is_check() else 'لا'}
 🔄 الرقعة مقلوبة: {'نعم' if self.flipped else 'لا'}
+
+📍 موقع المراجعة: {self.current_position}/{len(self.move_history)}
+🔍 وضع المراجعة: {'مفعل' if self.in_review_mode else 'معطل'}
+
+{captured_pieces}
 """
 
         tk.Label(
             stats_window,
             text=stats_text,
-            font=("Arial", 12),
+            font=("Arial", 11),
             bg="#3B4252",
             fg="#ECEFF4",
             justify=tk.LEFT
         ).pack(padx=20, pady=20)
+
+    def get_captured_pieces_detailed(self):
+        """حساب القطع المأسورة بالتفصيل"""
+        initial_pieces = {
+            chess.PAWN: 8, chess.ROOK: 2, chess.KNIGHT: 2,
+            chess.BISHOP: 2, chess.QUEEN: 1, chess.KING: 1
+        }
+        
+        current_white = {piece_type: 0 for piece_type in initial_pieces}
+        current_black = {piece_type: 0 for piece_type in initial_pieces}
+        
+        for square in chess.SQUARES:
+            piece = self.board.piece_at(square)
+            if piece:
+                if piece.color == chess.WHITE:
+                    current_white[piece.piece_type] += 1
+                else:
+                    current_black[piece.piece_type] += 1
+        
+        piece_names = {
+            chess.PAWN: "بيدق", chess.ROOK: "رخ", chess.KNIGHT: "حصان",
+            chess.BISHOP: "فيل", chess.QUEEN: "ملكة", chess.KING: "ملك"
+        }
+        
+        captured_white = []
+        captured_black = []
+        
+        for piece_type in initial_pieces:
+            white_lost = initial_pieces[piece_type] - current_white[piece_type]
+            black_lost = initial_pieces[piece_type] - current_black[piece_type]
+            
+            if white_lost > 0:
+                captured_white.extend([piece_names[piece_type]] * white_lost)
+            if black_lost > 0:
+                captured_black.extend([piece_names[piece_type]] * black_lost)
+        
+        result = "🏴 القطع المأسورة:\n"
+        if captured_white:
+            result += f"⚪ أبيض: {', '.join(captured_white)}\n"
+        if captured_black:
+            result += f"⚫ أسود: {', '.join(captured_black)}\n"
+        if not captured_white and not captured_black:
+            result += "لا توجد قطع مأسورة حتى الآن"
+            
+        return result
 
     def copy_pgn_to_clipboard(self):
         """نسخ PGN إلى الحافظة"""
@@ -207,7 +472,7 @@ class ProfessionalChessGame:
         """إعدادات الرقعة المتقدمة"""
         settings_window = tk.Toplevel(self.window)
         settings_window.title("🎨 إعدادات الرقعة")
-        settings_window.geometry("500x400")
+        settings_window.geometry("500x450")
         settings_window.configure(bg="#3B4252")
         
         # حجم الرقعة
@@ -224,27 +489,21 @@ class ProfessionalChessGame:
             bg="#434C5E", fg="#ECEFF4"
         ).pack(padx=10, pady=10, fill=tk.X)
         
-        # ألوان الرقعة
-        colors_frame = tk.LabelFrame(settings_window, text="🎨 ألوان الرقعة", bg="#3B4252", fg="#88C0D0")
-        colors_frame.pack(padx=20, pady=10, fill=tk.X)
+        # إعدادات العرض
+        display_frame = tk.LabelFrame(settings_window, text="👁️ إعدادات العرض", bg="#3B4252", fg="#88C0D0")
+        display_frame.pack(padx=20, pady=10, fill=tk.X)
         
-        tk.Label(colors_frame, text="قريباً: اختيار ألوان مخصصة", bg="#3B4252", fg="#D8DEE9").pack(pady=10)
-        
-        # تأثيرات بصرية
-        effects_frame = tk.LabelFrame(settings_window, text="✨ تأثيرات بصرية", bg="#3B4252", fg="#88C0D0")
-        effects_frame.pack(padx=20, pady=10, fill=tk.X)
-        
-        show_shadows = tk.BooleanVar(value=True)
+        show_moves_var = tk.BooleanVar(value=self.show_legal_moves)
         tk.Checkbutton(
-            effects_frame, text="إظهار ظلال القطع",
-            variable=show_shadows, bg="#3B4252", fg="#ECEFF4",
+            display_frame, text="إظهار الحركات القانونية",
+            variable=show_moves_var, bg="#3B4252", fg="#ECEFF4",
             selectcolor="#434C5E"
         ).pack(anchor=tk.W, padx=10, pady=5)
         
-        show_coords = tk.BooleanVar(value=True)
+        highlight_move_var = tk.BooleanVar(value=self.highlight_last_move)
         tk.Checkbutton(
-            effects_frame, text="إظهار إحداثيات الرقعة",
-            variable=show_coords, bg="#3B4252", fg="#ECEFF4",
+            display_frame, text="تمييز آخر حركة",
+            variable=highlight_move_var, bg="#3B4252", fg="#ECEFF4",
             selectcolor="#434C5E"
         ).pack(anchor=tk.W, padx=10, pady=5)
         
@@ -255,7 +514,10 @@ class ProfessionalChessGame:
         tk.Button(
             btn_frame, text="✅ تطبيق",
             bg="#A3BE8C", fg="white",
-            command=lambda: self.apply_board_settings(size_var.get(), settings_window)
+            command=lambda: self.apply_display_settings(
+                size_var.get(), show_moves_var.get(), 
+                highlight_move_var.get(), settings_window
+            )
         ).pack(side=tk.LEFT, padx=10)
         
         tk.Button(
@@ -263,6 +525,34 @@ class ProfessionalChessGame:
             bg="#BF616A", fg="white",
             command=settings_window.destroy
         ).pack(side=tk.LEFT, padx=10)
+
+    def apply_display_settings(self, new_size, show_moves, highlight_move, window):
+        """تطبيق إعدادات العرض"""
+        settings_changed = False
+        
+        if new_size != self.square_size:
+            self.square_size = new_size
+            self.load_local_piece_images()
+            settings_changed = True
+            
+        if show_moves != self.show_legal_moves:
+            self.show_legal_moves = show_moves
+            settings_changed = True
+            
+        if highlight_move != self.highlight_last_move:
+            self.highlight_last_move = highlight_move
+            settings_changed = True
+            
+        if settings_changed and self.canvas:
+            if new_size != 80:  # إذا تغير الحجم
+                self.canvas.configure(
+                    width=8 * self.square_size + 40,
+                    height=8 * self.square_size + 40
+                )
+            self.draw_enhanced_board()
+        
+        window.destroy()
+        messagebox.showinfo("✅ تم التطبيق", "تم تطبيق الإعدادات بنجاح!")
 
     def show_image_settings(self):
         """إعدادات الصور"""
@@ -316,23 +606,29 @@ class ProfessionalChessGame:
 
 🎯 الهدف:
 - الهدف من اللعبة هو وضع ملك الخصم في حالة "كش مات"
+- "كش مات" يعني أن الملك مهدد ولا يمكن إنقاذه
 
-👑 القطع وحركاتها:
-♔ الملك: يتحرك مربع واحد في أي اتجاه
-♕ الملكة: تتحرك في أي اتجاه أي عدد من المربعات
-♖ الرخ: يتحرك أفقياً أو عمودياً أي عدد من المربعات
-♗ الفيل: يتحرك قطرياً أي عدد من المربعات
-♘ الحصان: يتحرك على شكل حرف L
-♙ البيدق: يتحرك للأمام مربع واحد، يأسر قطرياً
+🎮 بداية اللعبة:
+- يبدأ اللاعب الأبيض دائماً
+- يتناوب اللاعبان في تحريك قطعة واحدة في كل دور
 
-🎮 قوانين خاصة:
-- التبييت: حركة خاصة للملك والرخ
-- الأسر بالمرور: حركة خاصة للبيدق
-- ترقية البيدق: عند الوصول للنهاية
-
-🏆 نهاية اللعبة:
+🏆 انتهاء اللعبة:
 - كش مات: الملك مهدد ولا يمكن إنقاذه
 - تعادل: عدة أسباب منها استنفاد الحركات
+- استسلام: أحد اللاعبين يستسلم
+
+⚖️ أسباب التعادل:
+- استنفاد الحركات (stalemate)
+- تكرار الوضع 3 مرات
+- قاعدة 50 حركة بدون أسر أو تحريك بيدق
+- عدم كفاية القطع للكش مات
+- اتفاق الطرفين على التعادل
+
+🎯 قوانين مهمة:
+- لا يمكن ترك الملك في وضع كش
+- إذا كان الملك في كش يجب إزالة التهديد فوراً
+- لا يمكن تحريك قطعة إذا كان سيعرض الملك للخطر
+- بعض الحركات لها قوانين خاصة (التبييت، الأسر بالمرور، الترقية)
         """
         
         rules_text.insert(1.0, rules_content)
@@ -342,7 +638,7 @@ class ProfessionalChessGame:
         """عرض اختصارات لوحة المفاتيح"""
         shortcuts_window = tk.Toplevel(self.window)
         shortcuts_window.title("⌨️ اختصارات لوحة المفاتيح")
-        shortcuts_window.geometry("450x400")
+        shortcuts_window.geometry("500x450")
         shortcuts_window.configure(bg="#3B4252")
         
         shortcuts_text = """
@@ -359,11 +655,19 @@ Esc             العودة للقائمة الرئيسية
 Ctrl + O        فتح ملف PGN
 Ctrl + S        حفظ ملف PGN
 
+⏭️ التنقل في تاريخ المباراة:
+←              الحركة السابقة
+→              الحركة التالية
+Home           بداية المباراة
+End            نهاية المباراة
+
 ❓ المساعدة:
 F1              قواعد الشطرنج
 
 🔧 أخرى:
 Alt + F4        خروج من البرنامج
+
+💡 نصيحة: في وضع المراجعة يمكنك استخدام الأسهم للتنقل عبر تاريخ المباراة!
         """
         
         tk.Label(
@@ -380,29 +684,30 @@ Alt + F4        خروج من البرنامج
             "ℹ️ حول البرنامج",
             "♔ لعبة الشطرنج الاحترافية ♛\n\n"
             "🔧 تطوير: مساعد الذكي الاصطناعي\n"
-            "📅 الإصدار: 2.0 المحسن\n"
+            "📅 الإصدار: 3.0 المتقدم\n"
             "🐍 Python + Tkinter + python-chess\n\n"
-            "✨ مميزات:\n"
+            "✨ مميزات جديدة:\n"
+            "• عرض الحركات القانونية\n"
+            "• التنقل في تاريخ المباراة\n"
+            "• وضع المراجعة المتقدم\n"
             "• واجهة احترافية\n"
             "• دعم PGN كامل\n"
-            "• ذكاء اصطناعي\n"
             "• تحكم متقدم\n\n"
             "🎯 استمتع باللعب!"
         )
 
     def quit_application(self):
         """خروج من التطبيق مع تأكيد"""
-        if self.board.move_stack and self.game_result is None:
+        if len(self.move_history) > 0 and self.game_result is None:
             result = messagebox.askyesnocancel(
                 "❌ تأكيد الخروج",
                 "هل تريد حفظ المباراة الحالية قبل الخروج؟"
             )
-            if result is True:  # نعم - احفظ
+            if result is True:
                 if self.save_pgn():
                     self.window.quit()
-            elif result is False:  # لا - لا تحفظ
+            elif result is False:
                 self.window.quit()
-            # إلغاء - لا تفعل شيئاً
         else:
             self.window.quit()
 
@@ -415,21 +720,6 @@ Alt + F4        خروج من البرنامج
             if self.game_started and self.canvas:
                 self.draw_enhanced_board()
             messagebox.showinfo("✅ تم التغيير", f"تم تغيير مجلد الصور إلى:\n{new_folder}")
-
-    def apply_board_settings(self, new_size, window):
-        """تطبيق إعدادات الرقعة"""
-        if new_size != self.square_size:
-            self.square_size = new_size
-            self.load_local_piece_images()
-            if self.game_started and self.canvas:
-                self.canvas.configure(
-                    width=8 * self.square_size + 40,
-                    height=8 * self.square_size + 40
-                )
-                self.draw_enhanced_board()
-        
-        window.destroy()
-        messagebox.showinfo("✅ تم التطبيق", "تم تطبيق الإعدادات بنجاح!")
 
     def load_local_piece_images(self):
         """تحميل صور قطع الشطرنج من مجلد images المحلي"""
@@ -530,7 +820,7 @@ Alt + F4        خروج من البرنامج
         
         subtitle_label = tk.Label(
             title_frame,
-            text="🎯 تجربة شطرنج احترافية مع رسوميات عالية الجودة",
+            text="🎯 تجربة شطرنج احترافية مع رسوميات عالية الجودة والحركات القانونية",
             font=("Arial", 14),
             bg="#2E3440",
             fg="#D8DEE9"
@@ -652,6 +942,10 @@ Alt + F4        خروج من البرنامج
         self.game_started = True
         self.game_result = None
         self.paused = False
+        self.move_history = []
+        self.current_position = 0
+        self.in_review_mode = False
+        self.last_move = None
         self.start_frame.destroy()
         self.create_game_interface()
         
@@ -664,7 +958,7 @@ Alt + F4        خروج من البرنامج
         main_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
         # الإطار الجانبي للأدوات
-        self.tools_frame = tk.Frame(main_frame, width=250, bg="#3B4252", relief=tk.RAISED, bd=2)
+        self.tools_frame = tk.Frame(main_frame, width=280, bg="#3B4252", relief=tk.RAISED, bd=2)
         self.tools_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(15, 0))
         self.tools_frame.pack_propagate(False)
         
@@ -828,12 +1122,13 @@ Alt + F4        خروج من البرنامج
             messagebox.showinfo(
                 "🏆 انتهت المباراة!",
                 f"🏳️ استسلم {current_player}\n\n"
-                f"🎉 تهانينا {winner} على الفوز!"
+                f"🎉 تهانينا {winner} على الفوز!\n\n"
+                f"💡 يمكنك الآن استخدام الأسهم لمراجعة المباراة!"
             )
 
     def cancel_game(self):
         """إلغاء المباراة الحالية"""
-        if not self.board.move_stack and self.game_result is None:
+        if not self.move_history and self.game_result is None:
             messagebox.showinfo("⚠️ تنبيه", "لم تبدأ المباراة بعد!")
             return
             
@@ -850,6 +1145,10 @@ Alt + F4        خروج من البرنامج
             
             self.board = chess.Board()
             self.selected_square = None
+            self.move_history = []
+            self.current_position = 0
+            self.in_review_mode = False
+            self.last_move = None
             
             if self.canvas:
                 self.draw_enhanced_board()
@@ -944,6 +1243,51 @@ Alt + F4        خروج من البرنامج
         )
         self.board_orientation_label.pack(pady=3)
         
+        # معلومات التنقل
+        self.position_label = tk.Label(
+            info_frame,
+            text="الموقع: الحالي",
+            font=("Arial", 11),
+            bg="#3B4252",
+            fg="#D8DEE9"
+        )
+        self.position_label.pack(pady=3)
+        
+        # أزرار التنقل
+        nav_frame = tk.LabelFrame(
+            self.tools_frame,
+            text="⏭️ التنقل في التاريخ",
+            font=("Arial", 12, "bold"),
+            bg="#3B4252",
+            fg="#88C0D0",
+            relief=tk.GROOVE,
+            bd=2
+        )
+        nav_frame.pack(padx=10, pady=5, fill=tk.X)
+        
+        nav_buttons_frame = tk.Frame(nav_frame, bg="#3B4252")
+        nav_buttons_frame.pack(pady=10)
+        
+        nav_buttons = [
+            ("⏪", self.go_to_start, "البداية"),
+            ("◀️", self.go_previous, "السابق"),
+            ("▶️", self.go_next, "التالي"),
+            ("⏩", self.go_to_end, "النهاية")
+        ]
+        
+        for symbol, command, tooltip in nav_buttons:
+            btn = tk.Button(
+                nav_buttons_frame,
+                text=symbol,
+                command=command,
+                font=("Arial", 12, "bold"),
+                bg="#434C5E",
+                fg="#ECEFF4",
+                width=3,
+                pady=5
+            )
+            btn.pack(side=tk.LEFT, padx=2)
+        
         # عرض تدوين PGN
         pgn_frame = tk.LabelFrame(
             self.tools_frame,
@@ -958,8 +1302,8 @@ Alt + F4        خروج من البرنامج
         
         self.pgn_text = scrolledtext.ScrolledText(
             pgn_frame,
-            height=12,
-            width=28,
+            height=10,
+            width=30,
             font=("Consolas", 10),
             bg="#434C5E",
             fg="#ECEFF4",
@@ -970,7 +1314,7 @@ Alt + F4        خروج من البرنامج
         self.pgn_text.pack(padx=5, pady=5, fill=tk.BOTH, expand=True)
         
     def draw_enhanced_board(self):
-        """رسم رقعة شطرنج محسنة مع الألوان الصحيحة"""
+        """رسم رقعة شطرنج محسنة مع الألوان الصحيحة والحركات القانونية"""
         if not self.canvas:
             return
             
@@ -987,12 +1331,114 @@ Alt + F4        خروج من البرنامج
             for col in range(8):
                 self.draw_correct_square(row, col)
                 
+        # رسم تمييز آخر حركة
+        if self.highlight_last_move and self.last_move:
+            self.draw_last_move_highlight()
+                
+        # رسم الحركات القانونية للقطعة المحددة
+        if self.show_legal_moves and self.selected_square is not None:
+            self.draw_legal_moves()
+        
         # رسم إحداثيات محسنة
         self.draw_enhanced_coordinates()
         
         # رسم القطع مع صور
         self.draw_pieces_with_images()
         
+    def draw_last_move_highlight(self):
+        """رسم تمييز آخر حركة"""
+        if not self.last_move:
+            return
+            
+        # تمييز مربع المصدر
+        from_square = self.last_move.from_square
+        from_file = chess.square_file(from_square)
+        from_rank = chess.square_rank(from_square)
+        
+        if self.flipped:
+            from_display_col = 7 - from_file
+            from_display_row = from_rank
+        else:
+            from_display_col = from_file
+            from_display_row = 7 - from_rank
+            
+        x1 = from_display_col * self.square_size + 20
+        y1 = from_display_row * self.square_size + 20
+        x2 = x1 + self.square_size
+        y2 = y1 + self.square_size
+        
+        self.canvas.create_rectangle(
+            x1, y1, x2, y2,
+            outline="#FFD700",
+            width=4,
+            tags="last_move"
+        )
+        
+        # تمييز مربع الهدف
+        to_square = self.last_move.to_square
+        to_file = chess.square_file(to_square)
+        to_rank = chess.square_rank(to_square)
+        
+        if self.flipped:
+            to_display_col = 7 - to_file
+            to_display_row = to_rank
+        else:
+            to_display_col = to_file
+            to_display_row = 7 - to_rank
+            
+        x1 = to_display_col * self.square_size + 20
+        y1 = to_display_row * self.square_size + 20
+        x2 = x1 + self.square_size
+        y2 = y1 + self.square_size
+        
+        self.canvas.create_rectangle(
+            x1, y1, x2, y2,
+            outline="#FFD700",
+            width=4,
+            tags="last_move"
+        )
+
+    def draw_legal_moves(self):
+        """رسم الحركات القانونية للقطعة المحددة"""
+        if not self.selected_square:
+            return
+            
+        legal_moves = self.get_legal_moves_for_square(self.selected_square)
+        
+        for target_square in legal_moves:
+            file = chess.square_file(target_square)
+            rank = chess.square_rank(target_square)
+            
+            if self.flipped:
+                display_col = 7 - file
+                display_row = rank
+            else:
+                display_col = file
+                display_row = 7 - rank
+            
+            x = display_col * self.square_size + self.square_size // 2 + 20
+            y = display_row * self.square_size + self.square_size // 2 + 20
+            
+            # رسم دائرة للحركات العادية
+            piece_on_target = self.board.piece_at(target_square)
+            if piece_on_target:
+                # مربع للأسر
+                self.canvas.create_rectangle(
+                    x - 20, y - 20, x + 20, y + 20,
+                    outline="#FF6B6B",
+                    width=3,
+                    tags="legal_move"
+                )
+            else:
+                # دائرة للحركة العادية
+                self.canvas.create_oval(
+                    x - 8, y - 8, x + 8, y + 8,
+                    fill="#4ECDC4",
+                    outline="#45B7AF",
+                    width=2,
+                    tags="legal_move"
+                )
+
     def draw_correct_square(self, row, col):
         """رسم مربع بالألوان الصحيحة - a1 أسود"""
         if self.flipped:
@@ -1163,7 +1609,7 @@ Alt + F4        خروج من البرنامج
 
     def on_mouse_motion(self, event):
         """تتبع حركة الماوس"""
-        if self.game_result is not None or self.paused or not self.canvas:
+        if self.game_result is not None or self.paused or not self.canvas or self.in_review_mode:
             return
             
         col = (event.x - 20) // self.square_size
@@ -1201,7 +1647,8 @@ Alt + F4        خروج من البرنامج
 
     def on_square_click(self, event):
         """التعامل مع النقر على مربع"""
-        if self.ai_thinking or self.game_result is not None or self.paused or not self.canvas:
+        if (self.ai_thinking or self.game_result is not None or 
+            self.paused or not self.canvas or self.in_review_mode):
             return
             
         col = (event.x - 20) // self.square_size
@@ -1243,6 +1690,7 @@ Alt + F4        خروج من البرنامج
     def make_move(self, move):
         """تنفيذ حركة والتحقق من حالة اللعبة"""
         self.board.push(move)
+        self.save_move_to_history(move)  # حفظ في التاريخ
         self.check_game_status()
         
         if (self.game_mode == "1vsAI" and 
@@ -1283,6 +1731,7 @@ Alt + F4        خروج من البرنامج
             return
             
         self.board.push(move)
+        self.save_move_to_history(move)  # حفظ في التاريخ
         self.ai_thinking = False
         self.check_game_status()
         self.draw_enhanced_board()
@@ -1294,24 +1743,28 @@ Alt + F4        خروج من البرنامج
         if self.ai_thinking or self.paused or not self.status_label:
             return
         
-        if self.game_result is not None:
+        if self.game_result is not None and not self.in_review_mode:
             return
             
-        if self.board.turn:
-            turn_text = "🎯 دور الأبيض"
+        if self.in_review_mode:
+            review_text = f"🔍 وضع المراجعة - الحركة {self.current_position}/{len(self.move_history)}"
+            self.status_label.config(text=review_text, fg="#9B59B6")
         else:
-            turn_text = "⚫ دور الأسود"
+            if self.board.turn:
+                turn_text = "🎯 دور الأبيض"
+            else:
+                turn_text = "⚫ دور الأسود"
+                
+            if self.board.is_check():
+                turn_text += " - كش! ⚠️"
+                
+            mode_text = "لاعب ضد لاعب" if self.game_mode == "1vs1" else "لاعب ضد الحاسوب"
+            full_text = f"{turn_text} - الوضع: {mode_text}"
             
-        if self.board.is_check():
-            turn_text += " - كش! ⚠️"
-            
-        mode_text = "لاعب ضد لاعب" if self.game_mode == "1vs1" else "لاعب ضد الحاسوب"
-        full_text = f"{turn_text} - الوضع: {mode_text}"
-        
-        self.status_label.config(text=full_text, fg="#ECEFF4")
+            self.status_label.config(text=full_text, fg="#ECEFF4")
         
         if self.moves_count_label:
-            self.moves_count_label.config(text=f"عدد الحركات: {len(self.board.move_stack)}")
+            self.moves_count_label.config(text=f"عدد الحركات: {len(self.move_history)}")
         
         # تحديث حالة المباراة
         if self.game_status_label:
@@ -1329,6 +1782,13 @@ Alt + F4        خروج من البرنامج
             self.board_orientation_label.config(
                 text=f"الرقعة: {'مقلوبة' if self.flipped else 'عادية'}"
             )
+            
+        # تحديث موقع التنقل
+        if self.position_label:
+            if self.in_review_mode:
+                self.position_label.config(text=f"الموقع: {self.current_position}/{len(self.move_history)}")
+            else:
+                self.position_label.config(text="الموقع: الحالي")
         
     def update_pgn_display(self):
         """تحديث عرض تدوين PGN"""
@@ -1344,6 +1804,10 @@ Alt + F4        خروج من البرنامج
             
             pgn_string = str(game)
             
+            # إضافة معلومات التنقل إذا كان في وضع المراجعة
+            if self.in_review_mode:
+                pgn_string += f"\n\n[وضع المراجعة - الحركة {self.current_position}/{len(self.move_history)}]"
+            
             self.pgn_text.delete(1.0, tk.END)
             self.pgn_text.insert(1.0, pgn_string)
             self.pgn_text.see(tk.END)
@@ -1357,18 +1821,22 @@ Alt + F4        خروج من البرنامج
             self.game_result = "كش مات"
             messagebox.showinfo(
                 "🎉 انتهت اللعبة!", 
-                f"✨ كش مات! فاز {winner} ✨\n\n🎯 تهانينا على المباراة الرائعة!"
+                f"✨ كش مات! فاز {winner} ✨\n\n"
+                f"🎯 تهانينا على المباراة الرائعة!\n\n"
+                f"💡 يمكنك الآن استخدام الأسهم لمراجعة المباراة!"
             )
         elif self.board.is_stalemate():
             self.game_result = "تعادل"
             messagebox.showinfo(
                 "🤝 انتهت اللعبة!", 
-                "⚖️ تعادل - استنفاد الحركات\n\n🎭 مباراة متوازنة ممتازة!"
+                "⚖️ تعادل - استنفاد الحركات\n\n"
+                f"🎭 مباراة متوازنة ممتازة!\n\n"
+                f"💡 يمكنك الآن استخدام الأسهم لمراجعة المباراة!"
             )
     
     def new_game(self):
         """بدء لعبة جديدة"""
-        if self.board.move_stack or self.game_result is not None:
+        if len(self.move_history) > 0 or self.game_result is not None:
             result = messagebox.askyesno(
                 "🔄 تأكيد اللعبة الجديدة",
                 "هل تريد بدء لعبة جديدة؟\n\n⚠️ ستفقد المباراة الحالية!"
@@ -1381,6 +1849,10 @@ Alt + F4        خروج من البرنامج
         self.ai_thinking = False
         self.game_result = None
         self.paused = False
+        self.move_history = []
+        self.current_position = 0
+        self.in_review_mode = False
+        self.last_move = None
         
         if self.canvas:
             self.canvas.delete("pause_overlay")
@@ -1392,7 +1864,7 @@ Alt + F4        خروج من البرنامج
     
     def undo_move(self):
         """التراجع عن آخر حركة"""
-        if not self.board.move_stack:
+        if not self.move_history:
             messagebox.showwarning("⚠️ تحذير", "لا توجد حركات للتراجع عنها!")
             return
             
@@ -1404,16 +1876,28 @@ Alt + F4        خروج من البرنامج
             messagebox.showinfo("⚠️ تنبيه", "لا يمكن التراجع أثناء الإيقاف المؤقت!")
             return
             
+        if self.in_review_mode:
+            messagebox.showinfo("⚠️ تنبيه", "لا يمكن التراجع في وضع المراجعة! استخدم أزرار التنقل.")
+            return
+            
         moves_to_undo = 1
-        if self.game_mode == "1vsAI" and len(self.board.move_stack) >= 2:
+        if self.game_mode == "1vsAI" and len(self.move_history) >= 2:
             moves_to_undo = 2
             
         for _ in range(moves_to_undo):
-            if self.board.move_stack:
+            if self.move_history:
+                self.move_history.pop()
                 self.board.pop()
                 
+        self.current_position = len(self.move_history)
         self.selected_square = None
         self.ai_thinking = False
+        
+        # تحديث آخر حركة
+        if self.move_history:
+            self.last_move = self.move_history[-1]['move']
+        else:
+            self.last_move = None
         
         if self.canvas:
             self.draw_enhanced_board()
@@ -1472,9 +1956,17 @@ Alt + F4        خروج من البرنامج
                     game = chess.pgn.read_game(f)
                     
                 if game:
-                    self.board = game.board()
+                    # إعادة تعيين حالة اللعبة
+                    self.board = chess.Board()
+                    self.move_history = []
+                    self.current_position = 0
+                    self.in_review_mode = False
+                    self.last_move = None
+                    
+                    # تطبيق جميع الحركات
                     for move in game.mainline_moves():
                         self.board.push(move)
+                        self.save_move_to_history(move)
                     
                     if hasattr(self, 'start_frame'):
                         self.start_frame.destroy()
@@ -1485,7 +1977,13 @@ Alt + F4        خروج من البرنامج
                     self.paused = False
                     self.create_game_interface()
                     
-                    messagebox.showinfo("✅ تم التحميل!", "📂 تم تحميل المباراة بنجاح!")
+                    # تفعيل وضع المراجعة تلقائياً
+                    self.in_review_mode = True
+                    messagebox.showinfo(
+                        "✅ تم التحميل!", 
+                        "📂 تم تحميل المباراة بنجاح!\n\n"
+                        "💡 تم تفعيل وضع المراجعة - استخدم الأسهم للتنقل!"
+                    )
                 else:
                     messagebox.showerror("❌ خطأ!", "🚫 ملف PGN غير صحيح")
                     
@@ -1494,7 +1992,7 @@ Alt + F4        خروج من البرنامج
     
     def return_to_menu(self):
         """العودة للقائمة الرئيسية"""
-        if self.board.move_stack and self.game_result is None:
+        if len(self.move_history) > 0 and self.game_result is None:
             result = messagebox.askyesnocancel(
                 "🏠 تأكيد العودة",
                 "هل تريد حفظ المباراة قبل العودة للقائمة الرئيسية؟"
@@ -1518,6 +2016,10 @@ Alt + F4        خروج من البرنامج
         self.ai_thinking = False
         self.game_result = None
         self.paused = False
+        self.move_history = []
+        self.current_position = 0
+        self.in_review_mode = False
+        self.last_move = None
         
         # إعادة تعيين متغيرات الواجهة
         self.status_label = None
@@ -1526,12 +2028,16 @@ Alt + F4        خروج من البرنامج
         self.game_status_label = None
         self.board_orientation_label = None
         self.pgn_text = None
+        self.position_label = None
         
         self.create_start_screen()
     
     def run(self):
         """تشغيل اللعبة الاحترافية"""
-        self.window.mainloop()
+        try:
+            self.window.mainloop()
+        except Exception as e:
+            messagebox.showerror("خطأ في النظام", f"حدث خطأ غير متوقع:\n{str(e)}")
 
 # تشغيل البرنامج
 if __name__ == "__main__":
