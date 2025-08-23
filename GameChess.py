@@ -1,3 +1,4 @@
+import sys
 import tkinter as tk
 from tkinter import messagebox, filedialog, scrolledtext
 import chess
@@ -10,6 +11,13 @@ import io
 from PIL import Image, ImageTk, ImageEnhance
 import os
 import asyncio
+def get_resource_path(relative_path):
+    """الحصول على مسار الموارد المضمنة في EXE"""
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
 class ProfessionalChessGame:
     def __init__(self):
@@ -30,8 +38,14 @@ class ProfessionalChessGame:
         self.game_result = None
         self.paused = False
         
-        # متغيرات Stockfish
-        self.stockfish_path = "stockfish.exe"  # مسار محرك Stockfish
+        # متغيرات Stockfish - مُعدلة للـ EXE
+        if getattr(sys, 'frozen', False):
+            # البرنامج يعمل كـ EXE
+            self.stockfish_path = get_resource_path("stockfish.exe")
+        else:
+            # البرنامج يعمل كسكريبت عادي
+            self.stockfish_path = "stockfish.exe"
+            
         self.engine = None
         self.stockfish_enabled = False
         self.stockfish_skill_level = 10  # مستوى من 0-20
@@ -63,8 +77,13 @@ class ProfessionalChessGame:
         self.piece_images = {}
         self.shadow_images = {}
         
-        # تحديد مسار مجلد الصور
-        self.images_path = "images"
+        # تحديد مسار مجلد الصور - مُعدل للـ EXE
+        if getattr(sys, 'frozen', False):
+            # البرنامج يعمل كـ EXE
+            self.images_path = get_resource_path("images")
+        else:
+            # البرنامج يعمل كسكريبت عادي
+            self.images_path = "images"
         
         # تحميل صور القطع
         self.load_local_piece_images()
