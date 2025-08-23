@@ -26,6 +26,15 @@ class ProfessionalChessGame:
         self.ai_thinking = False
         self.game_started = False
         self.game_result = None
+        self.paused = False
+        
+        # متغيرات الواجهة - تهيئة فارغة لتجنب الأخطاء
+        self.status_label = None
+        self.canvas = None
+        self.moves_count_label = None
+        self.game_status_label = None
+        self.board_orientation_label = None
+        self.pgn_text = None
         
         # متغيرات الصور
         self.piece_images = {}
@@ -40,8 +49,390 @@ class ProfessionalChessGame:
         # إنشاء واجهة البداية
         self.create_start_screen()
         
+    def create_main_menu(self):
+        """إنشاء شريط القوائم الرئيسي"""
+        menubar = tk.Menu(self.window)
+        self.window.config(menu=menubar)
+        
+        # قائمة اللعبة
+        game_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="🎮 اللعبة", menu=game_menu)
+        game_menu.add_command(label="🔄 لعبة جديدة", command=self.new_game, accelerator="Ctrl+N")
+        game_menu.add_command(label="⏸️ إيقاف/استئناف", command=self.toggle_pause, accelerator="Space")
+        game_menu.add_separator()
+        game_menu.add_command(label="🏳️ استسلام", command=self.resign_game)
+        game_menu.add_command(label="⏹️ إلغاء المباراة", command=self.cancel_game)
+        game_menu.add_separator()
+        game_menu.add_command(label="🏠 القائمة الرئيسية", command=self.return_to_menu)
+        game_menu.add_command(label="❌ خروج", command=self.quit_application, accelerator="Alt+F4")
+        
+        # قائمة التحكم
+        control_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="🎯 التحكم", menu=control_menu)
+        control_menu.add_command(label="↩️ تراجع", command=self.undo_move, accelerator="Ctrl+Z")
+        control_menu.add_command(label="🔄 قلب الرقعة", command=self.flip_board_enhanced, accelerator="Ctrl+F")
+        control_menu.add_separator()
+        control_menu.add_command(label="💡 إظهار الحركات الممكنة", command=self.toggle_show_moves)
+        control_menu.add_command(label="🎯 تمييز آخر حركة", command=self.toggle_highlight_last_move)
+        
+        # قائمة الملف
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="📁 ملف", menu=file_menu)
+        file_menu.add_command(label="📂 فتح PGN", command=self.load_pgn_game, accelerator="Ctrl+O")
+        file_menu.add_command(label="💾 حفظ PGN", command=self.save_pgn, accelerator="Ctrl+S")
+        file_menu.add_separator()
+        file_menu.add_command(label="📊 إحصائيات المباراة", command=self.show_game_stats)
+        file_menu.add_command(label="📋 نسخ PGN", command=self.copy_pgn_to_clipboard)
+        
+        # قائمة الإعدادات
+        settings_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="⚙️ إعدادات", menu=settings_menu)
+        settings_menu.add_command(label="🎨 إعدادات الرقعة", command=self.show_board_settings)
+        settings_menu.add_command(label="🖼️ إعدادات الصور", command=self.show_image_settings)
+        settings_menu.add_command(label="🎵 إعدادات الصوت", command=self.show_sound_settings)
+        
+        # قائمة المساعدة
+        help_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="❓ مساعدة", menu=help_menu)
+        help_menu.add_command(label="📖 قواعد الشطرنج", command=self.show_chess_rules)
+        help_menu.add_command(label="⌨️ اختصارات لوحة المفاتيح", command=self.show_keyboard_shortcuts)
+        help_menu.add_separator()
+        help_menu.add_command(label="ℹ️ حول البرنامج", command=self.show_about)
+        
+        # ربط اختصارات لوحة المفاتيح
+        self.bind_keyboard_shortcuts()
+
+    def bind_keyboard_shortcuts(self):
+        """ربط اختصارات لوحة المفاتيح"""
+        self.window.bind('<Control-n>', lambda e: self.new_game())
+        self.window.bind('<Control-z>', lambda e: self.undo_move())
+        self.window.bind('<Control-f>', lambda e: self.flip_board_enhanced())
+        self.window.bind('<Control-o>', lambda e: self.load_pgn_game())
+        self.window.bind('<Control-s>', lambda e: self.save_pgn())
+        self.window.bind('<space>', lambda e: self.toggle_pause())
+        self.window.bind('<F1>', lambda e: self.show_chess_rules())
+        self.window.bind('<Escape>', lambda e: self.return_to_menu())
+        
+        # التركيز على النافذة لاستقبال الأحداث
+        self.window.focus_set()
+
+    def toggle_pause(self):
+        """تبديل حالة الإيقاف المؤقت"""
+        if not self.game_started or self.game_result is not None or self.status_label is None:
+            return
+            
+        self.paused = not self.paused
+        
+        if self.paused:
+            self.ai_thinking = False
+            self.status_label.config(
+                text="⏸️ المباراة متوقفة مؤقتاً - اضغط Space للاستئناف",
+                fg="#9B59B6"
+            )
+            # إضافة تأثير بصري للإيقاف
+            if self.canvas:
+                self.canvas.create_rectangle(
+                    0, 0, self.canvas.winfo_reqwidth(), self.canvas.winfo_reqheight(),
+                    fill="black", stipple="gray50", tags="pause_overlay"
+                )
+        else:
+            if self.canvas:
+                self.canvas.delete("pause_overlay")
+            self.update_status()
+
+    def toggle_show_moves(self):
+        """تبديل إظهار الحركات الممكنة"""
+        messagebox.showinfo("قريباً", "هذه الميزة قيد التطوير!")
+
+    def toggle_highlight_last_move(self):
+        """تبديل تمييز آخر حركة"""
+        messagebox.showinfo("قريباً", "هذه الميزة قيد التطوير!")
+
+    def show_game_stats(self):
+        """عرض إحصائيات المباراة"""
+        if not self.game_started:
+            messagebox.showinfo("⚠️ تنبيه", "لا توجد مباراة جارية!")
+            return
+            
+        stats_window = tk.Toplevel(self.window)
+        stats_window.title("📊 إحصائيات المباراة")
+        stats_window.geometry("400x300")
+        stats_window.configure(bg="#3B4252")
+        
+        # حساب الإحصائيات
+        move_count = len(self.board.move_stack)
+        white_moves = (move_count + 1) // 2
+        black_moves = move_count // 2
+        
+        stats_text = f"""
+📊 إحصائيات المباراة الحالية:
+
+🎮 وضع اللعب: {'لاعب ضد لاعب' if self.game_mode == '1vs1' else 'لاعب ضد الحاسوب'}
+
+📈 عدد الحركات الإجمالي: {move_count}
+⚪ حركات الأبيض: {white_moves}
+⚫ حركات الأسود: {black_moves}
+
+🎯 الحالة الحالية: {'جارية' if self.game_result is None else self.game_result}
+👤 دور اللعب: {'الأبيض' if self.board.turn else 'الأسود'}
+
+⚠️ كش: {'نعم' if self.board.is_check() else 'لا'}
+🔄 الرقعة مقلوبة: {'نعم' if self.flipped else 'لا'}
+"""
+
+        tk.Label(
+            stats_window,
+            text=stats_text,
+            font=("Arial", 12),
+            bg="#3B4252",
+            fg="#ECEFF4",
+            justify=tk.LEFT
+        ).pack(padx=20, pady=20)
+
+    def copy_pgn_to_clipboard(self):
+        """نسخ PGN إلى الحافظة"""
+        if self.pgn_text is None:
+            messagebox.showwarning("⚠️ تحذير", "لا توجد مباراة لنسخها!")
+            return
+            
+        try:
+            pgn_content = self.pgn_text.get(1.0, tk.END).strip()
+            self.window.clipboard_clear()
+            self.window.clipboard_append(pgn_content)
+            messagebox.showinfo("✅ تم النسخ", "تم نسخ PGN إلى الحافظة!")
+        except Exception as e:
+            messagebox.showerror("❌ خطأ", f"فشل في النسخ: {str(e)}")
+
+    def show_board_settings(self):
+        """إعدادات الرقعة المتقدمة"""
+        settings_window = tk.Toplevel(self.window)
+        settings_window.title("🎨 إعدادات الرقعة")
+        settings_window.geometry("500x400")
+        settings_window.configure(bg="#3B4252")
+        
+        # حجم الرقعة
+        size_frame = tk.LabelFrame(settings_window, text="📏 حجم الرقعة", bg="#3B4252", fg="#88C0D0")
+        size_frame.pack(padx=20, pady=10, fill=tk.X)
+        
+        size_var = tk.IntVar(value=self.square_size)
+        tk.Scale(
+            size_frame,
+            from_=60, to=120,
+            orient=tk.HORIZONTAL,
+            variable=size_var,
+            label="حجم المربع",
+            bg="#434C5E", fg="#ECEFF4"
+        ).pack(padx=10, pady=10, fill=tk.X)
+        
+        # ألوان الرقعة
+        colors_frame = tk.LabelFrame(settings_window, text="🎨 ألوان الرقعة", bg="#3B4252", fg="#88C0D0")
+        colors_frame.pack(padx=20, pady=10, fill=tk.X)
+        
+        tk.Label(colors_frame, text="قريباً: اختيار ألوان مخصصة", bg="#3B4252", fg="#D8DEE9").pack(pady=10)
+        
+        # تأثيرات بصرية
+        effects_frame = tk.LabelFrame(settings_window, text="✨ تأثيرات بصرية", bg="#3B4252", fg="#88C0D0")
+        effects_frame.pack(padx=20, pady=10, fill=tk.X)
+        
+        show_shadows = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            effects_frame, text="إظهار ظلال القطع",
+            variable=show_shadows, bg="#3B4252", fg="#ECEFF4",
+            selectcolor="#434C5E"
+        ).pack(anchor=tk.W, padx=10, pady=5)
+        
+        show_coords = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            effects_frame, text="إظهار إحداثيات الرقعة",
+            variable=show_coords, bg="#3B4252", fg="#ECEFF4",
+            selectcolor="#434C5E"
+        ).pack(anchor=tk.W, padx=10, pady=5)
+        
+        # أزرار التحكم
+        btn_frame = tk.Frame(settings_window, bg="#3B4252")
+        btn_frame.pack(pady=20)
+        
+        tk.Button(
+            btn_frame, text="✅ تطبيق",
+            bg="#A3BE8C", fg="white",
+            command=lambda: self.apply_board_settings(size_var.get(), settings_window)
+        ).pack(side=tk.LEFT, padx=10)
+        
+        tk.Button(
+            btn_frame, text="❌ إلغاء",
+            bg="#BF616A", fg="white",
+            command=settings_window.destroy
+        ).pack(side=tk.LEFT, padx=10)
+
+    def show_image_settings(self):
+        """إعدادات الصور"""
+        settings_window = tk.Toplevel(self.window)
+        settings_window.title("🖼️ إعدادات الصور")
+        settings_window.geometry("400x300")
+        settings_window.configure(bg="#3B4252")
+        
+        tk.Label(
+            settings_window,
+            text="🖼️ إعدادات الصور",
+            font=("Arial", 16, "bold"),
+            bg="#3B4252", fg="#ECEFF4"
+        ).pack(pady=20)
+        
+        tk.Button(
+            settings_window,
+            text="🔄 إعادة تحميل الصور",
+            bg="#D08770", fg="white",
+            command=self.reload_images
+        ).pack(pady=10)
+        
+        tk.Button(
+            settings_window,
+            text="📁 تغيير مجلد الصور",
+            bg="#5E81AC", fg="white",
+            command=self.change_images_folder
+        ).pack(pady=10)
+
+    def show_sound_settings(self):
+        """إعدادات الصوت"""
+        messagebox.showinfo("🎵 إعدادات الصوت", "إعدادات الصوت قيد التطوير!")
+
+    def show_chess_rules(self):
+        """عرض قواعد الشطرنج"""
+        rules_window = tk.Toplevel(self.window)
+        rules_window.title("📖 قواعد الشطرنج")
+        rules_window.geometry("600x500")
+        rules_window.configure(bg="#3B4252")
+        
+        rules_text = scrolledtext.ScrolledText(
+            rules_window,
+            bg="#434C5E", fg="#ECEFF4",
+            font=("Arial", 11),
+            wrap=tk.WORD
+        )
+        rules_text.pack(padx=20, pady=20, fill=tk.BOTH, expand=True)
+        
+        rules_content = """
+📖 قواعد الشطرنج الأساسية:
+
+🎯 الهدف:
+- الهدف من اللعبة هو وضع ملك الخصم في حالة "كش مات"
+
+👑 القطع وحركاتها:
+♔ الملك: يتحرك مربع واحد في أي اتجاه
+♕ الملكة: تتحرك في أي اتجاه أي عدد من المربعات
+♖ الرخ: يتحرك أفقياً أو عمودياً أي عدد من المربعات
+♗ الفيل: يتحرك قطرياً أي عدد من المربعات
+♘ الحصان: يتحرك على شكل حرف L
+♙ البيدق: يتحرك للأمام مربع واحد، يأسر قطرياً
+
+🎮 قوانين خاصة:
+- التبييت: حركة خاصة للملك والرخ
+- الأسر بالمرور: حركة خاصة للبيدق
+- ترقية البيدق: عند الوصول للنهاية
+
+🏆 نهاية اللعبة:
+- كش مات: الملك مهدد ولا يمكن إنقاذه
+- تعادل: عدة أسباب منها استنفاد الحركات
+        """
+        
+        rules_text.insert(1.0, rules_content)
+        rules_text.configure(state=tk.DISABLED)
+
+    def show_keyboard_shortcuts(self):
+        """عرض اختصارات لوحة المفاتيح"""
+        shortcuts_window = tk.Toplevel(self.window)
+        shortcuts_window.title("⌨️ اختصارات لوحة المفاتيح")
+        shortcuts_window.geometry("450x400")
+        shortcuts_window.configure(bg="#3B4252")
+        
+        shortcuts_text = """
+⌨️ اختصارات لوحة المفاتيح:
+
+🎮 التحكم في اللعبة:
+Ctrl + N        لعبة جديدة
+Space           إيقاف مؤقت / استئناف
+Ctrl + Z        تراجع عن الحركة
+Ctrl + F        قلب الرقعة
+Esc             العودة للقائمة الرئيسية
+
+📁 الملفات:
+Ctrl + O        فتح ملف PGN
+Ctrl + S        حفظ ملف PGN
+
+❓ المساعدة:
+F1              قواعد الشطرنج
+
+🔧 أخرى:
+Alt + F4        خروج من البرنامج
+        """
+        
+        tk.Label(
+            shortcuts_window,
+            text=shortcuts_text,
+            font=("Consolas", 11),
+            bg="#3B4252", fg="#ECEFF4",
+            justify=tk.LEFT
+        ).pack(padx=20, pady=20)
+
+    def show_about(self):
+        """عرض معلومات البرنامج"""
+        messagebox.showinfo(
+            "ℹ️ حول البرنامج",
+            "♔ لعبة الشطرنج الاحترافية ♛\n\n"
+            "🔧 تطوير: مساعد الذكي الاصطناعي\n"
+            "📅 الإصدار: 2.0 المحسن\n"
+            "🐍 Python + Tkinter + python-chess\n\n"
+            "✨ مميزات:\n"
+            "• واجهة احترافية\n"
+            "• دعم PGN كامل\n"
+            "• ذكاء اصطناعي\n"
+            "• تحكم متقدم\n\n"
+            "🎯 استمتع باللعب!"
+        )
+
+    def quit_application(self):
+        """خروج من التطبيق مع تأكيد"""
+        if self.board.move_stack and self.game_result is None:
+            result = messagebox.askyesnocancel(
+                "❌ تأكيد الخروج",
+                "هل تريد حفظ المباراة الحالية قبل الخروج؟"
+            )
+            if result is True:  # نعم - احفظ
+                if self.save_pgn():
+                    self.window.quit()
+            elif result is False:  # لا - لا تحفظ
+                self.window.quit()
+            # إلغاء - لا تفعل شيئاً
+        else:
+            self.window.quit()
+
+    def change_images_folder(self):
+        """تغيير مجلد الصور"""
+        new_folder = filedialog.askdirectory(title="اختر مجلد الصور الجديد")
+        if new_folder:
+            self.images_path = new_folder
+            self.load_local_piece_images()
+            if self.game_started and self.canvas:
+                self.draw_enhanced_board()
+            messagebox.showinfo("✅ تم التغيير", f"تم تغيير مجلد الصور إلى:\n{new_folder}")
+
+    def apply_board_settings(self, new_size, window):
+        """تطبيق إعدادات الرقعة"""
+        if new_size != self.square_size:
+            self.square_size = new_size
+            self.load_local_piece_images()
+            if self.game_started and self.canvas:
+                self.canvas.configure(
+                    width=8 * self.square_size + 40,
+                    height=8 * self.square_size + 40
+                )
+                self.draw_enhanced_board()
+        
+        window.destroy()
+        messagebox.showinfo("✅ تم التطبيق", "تم تطبيق الإعدادات بنجاح!")
+
     def load_local_piece_images(self):
-        """تحميل صور قطع الشطرنج من مجلد images المحلي - مُصلح"""
+        """تحميل صور قطع الشطرنج من مجلد images المحلي"""
         piece_files = {
             'wK': 'wK.png',    'wQ': 'wQ.png',    'wR': 'wR.png',
             'wB': 'wB.png',    'wN': 'wN.png',    'wP': 'wP.png',
@@ -65,18 +456,13 @@ class ProfessionalChessGame:
             
             if os.path.exists(file_path):
                 try:
-                    # تحميل الصورة
                     img = Image.open(file_path)
-                    
-                    # التأكد من أن الصورة لديها قناة شفافية
                     if img.mode != 'RGBA':
                         img = img.convert('RGBA')
                     
-                    # تغيير الحجم
                     img = img.resize((self.square_size - 10, self.square_size - 10), Image.Resampling.LANCZOS)
                     self.piece_images[piece_code] = ImageTk.PhotoImage(img)
                     
-                    # إنشاء صورة الظل - الطريقة المُصلحة
                     shadow_img = self.create_shadow_image(img)
                     if shadow_img:
                         self.shadow_images[piece_code] = ImageTk.PhotoImage(shadow_img)
@@ -96,35 +482,19 @@ class ProfessionalChessGame:
                 self.shadow_images[piece_code] = None
         
         print(f"✅ تم تحميل {loaded_count} صورة من أصل {len(piece_files)}")
-        
-        # إذا فشل تحميل معظم الصور، استخدم النصوص
-        if loaded_count < len(piece_files) // 2:
-            messagebox.showwarning(
-                "⚠️ تحذير الصور", 
-                f"تم تحميل {loaded_count} صورة فقط من أصل {len(piece_files)}\n"
-                f"سيتم استخدام النصوص للقطع المفقودة"
-            )
 
     def create_shadow_image(self, img):
         """إنشاء صورة الظل بطريقة آمنة"""
         try:
-            # نسخ الصورة
             shadow_img = img.copy()
-            
-            # طريقة أبسط وأكثر أماناً لإنشاء الظل
-            # تعتيم الصورة
             enhancer = ImageEnhance.Brightness(shadow_img)
-            shadow_img = enhancer.enhance(0.3)  # تعتيم بنسبة 30%
+            shadow_img = enhancer.enhance(0.3)
             
-            # تقليل الشفافية
             if shadow_img.mode == 'RGBA':
-                # فصل القنوات
                 r, g, b, a = shadow_img.split()
-                # تحويل القنوات إلى رمادي داكن
-                gray = Image.new('L', r.size, 50)  # رمادي داكن
-                # دمج القنوات مع تقليل الشفافية
+                gray = Image.new('L', r.size, 50)
                 alpha_enhancer = ImageEnhance.Brightness(a)
-                a = alpha_enhancer.enhance(0.5)  # نصف الشفافية
+                a = alpha_enhancer.enhance(0.5)
                 shadow_img = Image.merge('RGBA', (gray, gray, gray, a))
             
             return shadow_img
@@ -140,7 +510,7 @@ class ProfessionalChessGame:
             self.shadow_images[piece_code] = None
             
     def create_start_screen(self):
-        """إنشاء واجهة البداية المحسنة"""
+        """إنشاء واجهة البداية"""
         self.start_frame = tk.Frame(self.window, bg="#2E3440")
         self.start_frame.pack(fill=tk.BOTH, expand=True)
         
@@ -191,20 +561,9 @@ class ProfessionalChessGame:
                 command=command
             )
             btn.pack(pady=8)
-            
-            btn.bind("<Enter>", lambda e, btn=btn, color=color: btn.config(bg=self.lighten_color(color)))
-            btn.bind("<Leave>", lambda e, btn=btn, color=color: btn.config(bg=color))
 
-    def lighten_color(self, color):
-        """تفتيح لون للتأثير التفاعلي"""
-        color_map = {
-            "#5E81AC": "#7C9CC4", "#BF616A": "#CC7A82", 
-            "#A3BE8C": "#B5CAA0", "#B48EAD": "#C5A3BD"
-        }
-        return color_map.get(color, color)
-        
     def show_settings(self):
-        """نافذة الإعدادات"""
+        """نافذة الإعدادات الأساسية"""
         settings_window = tk.Toplevel(self.window)
         settings_window.title("⚙️ إعدادات اللعبة")
         settings_window.geometry("400x350")
@@ -219,7 +578,6 @@ class ProfessionalChessGame:
             fg="#ECEFF4"
         ).pack(pady=20)
         
-        # إعدادات حجم الرقعة
         size_frame = tk.Frame(settings_window, bg="#3B4252")
         size_frame.pack(pady=10)
         
@@ -244,7 +602,6 @@ class ProfessionalChessGame:
         )
         size_scale.pack(side=tk.LEFT, padx=10)
         
-        # زر إعادة تحميل الصور
         tk.Button(
             settings_window,
             text="🔄 إعادة تحميل الصور",
@@ -270,7 +627,7 @@ class ProfessionalChessGame:
     def reload_images(self):
         """إعادة تحميل الصور"""
         self.load_local_piece_images()
-        if self.game_started:
+        if self.game_started and self.canvas:
             self.draw_enhanced_board()
         messagebox.showinfo("✅ تم", "تم إعادة تحميل الصور بنجاح!")
         
@@ -279,7 +636,7 @@ class ProfessionalChessGame:
         if new_size != self.square_size:
             self.square_size = new_size
             self.load_local_piece_images()
-            if self.game_started:
+            if self.game_started and self.canvas:
                 self.canvas.configure(
                     width=8 * self.square_size + 40,
                     height=8 * self.square_size + 40
@@ -294,11 +651,15 @@ class ProfessionalChessGame:
         self.game_mode = mode
         self.game_started = True
         self.game_result = None
+        self.paused = False
         self.start_frame.destroy()
         self.create_game_interface()
         
     def create_game_interface(self):
         """إنشاء واجهة اللعبة المحسنة"""
+        # إنشاء شريط القوائم أولاً
+        self.create_main_menu()
+        
         main_frame = tk.Frame(self.window, bg="#2E3440")
         main_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
@@ -332,7 +693,7 @@ class ProfessionalChessGame:
         # شريط المعلومات المحسن
         self.create_enhanced_status_bar(game_frame)
         
-        # أزرار التحكم المحسنة مع مميزات جديدة
+        # أزرار التحكم المحسنة
         self.create_enhanced_control_buttons(game_frame)
         
         # الأدوات الجانبية المحسنة
@@ -359,7 +720,7 @@ class ProfessionalChessGame:
         self.status_label.pack()
         
     def create_enhanced_control_buttons(self, parent):
-        """إنشاء أزرار تحكم محسنة مع مميزات جديدة"""
+        """إنشاء أزرار تحكم محسنة"""
         button_frame = tk.Frame(parent, bg="#2E3440")
         button_frame.pack(pady=15)
         
@@ -370,21 +731,21 @@ class ProfessionalChessGame:
         buttons_row1 = [
             ("🔄", "لعبة جديدة", self.new_game, "#5E81AC"),
             ("↩️", "تراجع", self.undo_move, "#D08770"),
-            ("🔄", "قلب الرقعة", self.flip_board, "#A3BE8C"),
+            ("🔄", "قلب الرقعة", self.flip_board_enhanced, "#A3BE8C"),
             ("💾", "حفظ PGN", self.save_pgn, "#B48EAD")
         ]
         
         for icon, text, command, color in buttons_row1:
             self.create_control_button(first_row, icon, text, command, color)
         
-        # الصف الثاني من الأزرار - مميزات جديدة
+        # الصف الثاني من الأزرار
         second_row = tk.Frame(button_frame, bg="#2E3440")
         second_row.pack(pady=5)
         
         buttons_row2 = [
             ("🏳️", "استسلام", self.resign_game, "#E74C3C"),
             ("⏹️", "إلغاء المباراة", self.cancel_game, "#F39C12"),
-            ("⏸️", "إيقاف مؤقت", self.pause_game, "#9B59B6"),
+            ("⏸️", "إيقاف مؤقت", self.toggle_pause, "#9B59B6"),
             ("🏠", "القائمة الرئيسية", self.return_to_menu, "#BF616A")
         ]
         
@@ -410,10 +771,32 @@ class ProfessionalChessGame:
             width=7
         )
         btn.pack()
+
+    def flip_board_enhanced(self):
+        """قلب الرقعة مع تحسينات بصرية"""
+        if self.paused:
+            messagebox.showinfo("⚠️ تنبيه", "لا يمكن قلب الرقعة أثناء الإيقاف المؤقت!")
+            return
+            
+        if not self.canvas:
+            return
+            
+        self.flipped = not self.flipped
         
-        # تأثيرات بصرية
-        btn.bind("<Enter>", lambda e: btn.config(bg=self.lighten_color(color), relief=tk.GROOVE))
-        btn.bind("<Leave>", lambda e: btn.config(bg=color, relief=tk.RAISED))
+        flip_text = "🔄 تم قلب الرقعة" if self.flipped else "🔄 تم إعادة الرقعة للوضع الطبيعي"
+        
+        self.draw_enhanced_board()
+        
+        self.canvas.create_text(
+            (8 * self.square_size + 40) // 2,
+            (8 * self.square_size + 40) // 2,
+            text=flip_text,
+            font=("Arial", 16, "bold"),
+            fill="#88C0D0",
+            tags="flip_message"
+        )
+        
+        self.window.after(1000, lambda: self.canvas.delete("flip_message"))
 
     def resign_game(self):
         """استسلام أحد اللاعبين"""
@@ -421,11 +804,9 @@ class ProfessionalChessGame:
             messagebox.showinfo("⚠️ تنبيه", "المباراة انتهت بالفعل!")
             return
             
-        # تحديد اللاعب المستسلم
         current_player = "الأبيض" if self.board.turn else "الأسود"
         winner = "الأسود" if self.board.turn else "الأبيض"
         
-        # تأكيد الاستسلام
         result = messagebox.askyesno(
             "🏳️ تأكيد الاستسلام",
             f"هل أنت متأكد من استسلام {current_player}؟\n\n"
@@ -436,13 +817,12 @@ class ProfessionalChessGame:
             self.game_result = "استسلام"
             self.ai_thinking = False
             
-            # تحديث حالة اللعبة
-            self.status_label.config(
-                text=f"🏳️ استسلم {current_player} - فاز {winner} 🏆",
-                fg="#E74C3C"
-            )
+            if self.status_label:
+                self.status_label.config(
+                    text=f"🏳️ استسلم {current_player} - فاز {winner} 🏆",
+                    fg="#E74C3C"
+                )
             
-            # إضافة نتيجة الاستسلام لـ PGN
             self.update_pgn_with_result("استسلام", winner)
             
             messagebox.showinfo(
@@ -466,42 +846,25 @@ class ProfessionalChessGame:
         if result:
             self.game_result = "ملغاة"
             self.ai_thinking = False
+            self.paused = False
             
-            # إعادة تعيين اللعبة
             self.board = chess.Board()
             self.selected_square = None
             
-            # تحديث الواجهة
-            self.draw_enhanced_board()
-            self.status_label.config(
-                text="⏹️ تم إلغاء المباراة - جاهز لبدء مباراة جديدة",
-                fg="#F39C12"
-            )
+            if self.canvas:
+                self.draw_enhanced_board()
+                
+            if self.status_label:
+                self.status_label.config(
+                    text="⏹️ تم إلغاء المباراة - جاهز لبدء مباراة جديدة",
+                    fg="#F39C12"
+                )
             
-            # مسح PGN
-            self.pgn_text.delete(1.0, tk.END)
-            self.pgn_text.insert(1.0, "المباراة ملغاة - لا توجد حركات")
+            if self.pgn_text:
+                self.pgn_text.delete(1.0, tk.END)
+                self.pgn_text.insert(1.0, "المباراة ملغاة - لا توجد حركات")
             
             messagebox.showinfo("⏹️ تم الإلغاء", "تم إلغاء المباراة بنجاح!")
-
-    def pause_game(self):
-        """إيقاف مؤقت للمباراة"""
-        if self.game_result is not None:
-            messagebox.showinfo("⚠️ تنبيه", "المباراة انتهت بالفعل!")
-            return
-            
-        # إيقاف الحاسوب إذا كان يفكر
-        if self.ai_thinking:
-            self.ai_thinking = False
-            self.status_label.config(
-                text="⏸️ المباراة متوقفة مؤقتاً - انقر 'استئناف' للمتابعة",
-                fg="#9B59B6"
-            )
-            messagebox.showinfo("⏸️ إيقاف مؤقت", "تم إيقاف المباراة مؤقتاً!")
-        else:
-            # استئناف المباراة
-            self.update_status()
-            messagebox.showinfo("▶️ استئناف", "تم استئناف المباراة!")
 
     def update_pgn_with_result(self, result_type, winner):
         """تحديث PGN مع نتيجة المباراة"""
@@ -512,7 +875,6 @@ class ProfessionalChessGame:
             game.headers["White"] = "اللاعب الأبيض"
             game.headers["Black"] = "اللاعب الأسود" if self.game_mode == "1vs1" else "الحاسوب"
             
-            # تحديد النتيجة
             if result_type == "استسلام":
                 if winner == "الأبيض":
                     game.headers["Result"] = "1-0"
@@ -525,9 +887,10 @@ class ProfessionalChessGame:
             if result_type == "استسلام":
                 pgn_string += f"\n\n[النتيجة: {result_type} - فاز {winner}]"
             
-            self.pgn_text.delete(1.0, tk.END)
-            self.pgn_text.insert(1.0, pgn_string)
-            
+            if self.pgn_text:
+                self.pgn_text.delete(1.0, tk.END)
+                self.pgn_text.insert(1.0, pgn_string)
+                
         except Exception as e:
             print(f"خطأ في تحديث PGN: {e}")
             
@@ -572,6 +935,15 @@ class ProfessionalChessGame:
         )
         self.game_status_label.pack(pady=3)
         
+        self.board_orientation_label = tk.Label(
+            info_frame,
+            text="الرقعة: عادية",
+            font=("Arial", 11),
+            bg="#3B4252",
+            fg="#D8DEE9"
+        )
+        self.board_orientation_label.pack(pady=3)
+        
         # عرض تدوين PGN
         pgn_frame = tk.LabelFrame(
             self.tools_frame,
@@ -599,6 +971,9 @@ class ProfessionalChessGame:
         
     def draw_enhanced_board(self):
         """رسم رقعة شطرنج محسنة مع الألوان الصحيحة"""
+        if not self.canvas:
+            return
+            
         self.canvas.delete("all")
         
         # رسم الخلفية
@@ -633,8 +1008,6 @@ class ProfessionalChessGame:
         y2 = y1 + self.square_size
         
         # الخوارزمية الصحيحة لألوان الشطرنج
-        # a1 = (0,0) يجب أن يكون أسود
-        # إذا كان مجموع الإحداثيات زوجي = أسود، فردي = أبيض
         square_is_dark = (row + col) % 2 == 0
         
         if square_is_dark:
@@ -790,7 +1163,7 @@ class ProfessionalChessGame:
 
     def on_mouse_motion(self, event):
         """تتبع حركة الماوس"""
-        if self.game_result is not None:
+        if self.game_result is not None or self.paused or not self.canvas:
             return
             
         col = (event.x - 20) // self.square_size
@@ -823,11 +1196,12 @@ class ProfessionalChessGame:
 
     def on_mouse_leave(self, event):
         """إزالة تأثيرات التفاعل"""
-        self.canvas.delete("hover")
+        if self.canvas:
+            self.canvas.delete("hover")
 
     def on_square_click(self, event):
         """التعامل مع النقر على مربع"""
-        if self.ai_thinking or self.game_result is not None:
+        if self.ai_thinking or self.game_result is not None or self.paused or not self.canvas:
             return
             
         col = (event.x - 20) // self.square_size
@@ -879,20 +1253,21 @@ class ProfessionalChessGame:
     
     def ai_move(self):
         """حركة الحاسوب العشوائية"""
-        if self.game_result is not None:
+        if self.game_result is not None or self.paused:
             return
             
         self.ai_thinking = True
-        self.status_label.config(
-            text="🤔 الحاسوب يفكر...",
-            fg="#D08770"
-        )
+        if self.status_label:
+            self.status_label.config(
+                text="🤔 الحاسوب يفكر...",
+                fg="#D08770"
+            )
         
         def think_and_move():
             thinking_time = random.uniform(1.0, 3.0)
             time.sleep(thinking_time)
             
-            if not self.board.is_game_over() and self.game_result is None:
+            if not self.board.is_game_over() and self.game_result is None and not self.paused:
                 legal_moves = list(self.board.legal_moves)
                 if legal_moves:
                     ai_move = random.choice(legal_moves)
@@ -904,7 +1279,7 @@ class ProfessionalChessGame:
     
     def execute_ai_move(self, move):
         """تنفيذ حركة الحاسوب"""
-        if self.game_result is not None:
+        if self.game_result is not None or self.paused:
             return
             
         self.board.push(move)
@@ -914,14 +1289,9 @@ class ProfessionalChessGame:
         self.update_status()
         self.update_pgn_display()
     
-    def flip_board(self):
-        """قلب اتجاه الرقعة"""
-        self.flipped = not self.flipped
-        self.draw_enhanced_board()
-    
     def update_status(self):
         """تحديث معلومات حالة اللعبة"""
-        if self.ai_thinking:
+        if self.ai_thinking or self.paused or not self.status_label:
             return
         
         if self.game_result is not None:
@@ -939,20 +1309,32 @@ class ProfessionalChessGame:
         full_text = f"{turn_text} - الوضع: {mode_text}"
         
         self.status_label.config(text=full_text, fg="#ECEFF4")
-        self.moves_count_label.config(text=f"عدد الحركات: {len(self.board.move_stack)}")
+        
+        if self.moves_count_label:
+            self.moves_count_label.config(text=f"عدد الحركات: {len(self.board.move_stack)}")
         
         # تحديث حالة المباراة
-        if self.board.is_game_over():
-            self.game_status_label.config(text="الحالة: انتهت")
-        elif self.game_result == "ملغاة":
-            self.game_status_label.config(text="الحالة: ملغاة")
-        elif self.game_result == "استسلام":
-            self.game_status_label.config(text="الحالة: استسلام")
-        else:
-            self.game_status_label.config(text="الحالة: جارية")
+        if self.game_status_label:
+            if self.board.is_game_over():
+                self.game_status_label.config(text="الحالة: انتهت")
+            elif self.game_result == "ملغاة":
+                self.game_status_label.config(text="الحالة: ملغاة")
+            elif self.game_result == "استسلام":
+                self.game_status_label.config(text="الحالة: استسلام")
+            else:
+                self.game_status_label.config(text="الحالة: جارية")
+                
+        # تحديث اتجاه الرقعة
+        if self.board_orientation_label:
+            self.board_orientation_label.config(
+                text=f"الرقعة: {'مقلوبة' if self.flipped else 'عادية'}"
+            )
         
     def update_pgn_display(self):
         """تحديث عرض تدوين PGN"""
+        if not self.pgn_text:
+            return
+            
         try:
             game = chess.pgn.Game.from_board(self.board)
             game.headers["Event"] = "مباراة احترافية"
@@ -998,7 +1380,12 @@ class ProfessionalChessGame:
         self.selected_square = None
         self.ai_thinking = False
         self.game_result = None
-        self.draw_enhanced_board()
+        self.paused = False
+        
+        if self.canvas:
+            self.canvas.delete("pause_overlay")
+            self.draw_enhanced_board()
+            
         self.update_status()
         self.update_pgn_display()
         messagebox.showinfo("✨ لعبة جديدة!", "🎮 تم بدء مباراة جديدة بنجاح!")
@@ -1013,6 +1400,10 @@ class ProfessionalChessGame:
             messagebox.showinfo("⚠️ تنبيه", "لا يمكن التراجع بعد انتهاء المباراة!")
             return
             
+        if self.paused:
+            messagebox.showinfo("⚠️ تنبيه", "لا يمكن التراجع أثناء الإيقاف المؤقت!")
+            return
+            
         moves_to_undo = 1
         if self.game_mode == "1vsAI" and len(self.board.move_stack) >= 2:
             moves_to_undo = 2
@@ -1023,7 +1414,10 @@ class ProfessionalChessGame:
                 
         self.selected_square = None
         self.ai_thinking = False
-        self.draw_enhanced_board()
+        
+        if self.canvas:
+            self.draw_enhanced_board()
+            
         self.update_status()
         self.update_pgn_display()
         
@@ -1043,7 +1437,6 @@ class ProfessionalChessGame:
                 game.headers["White"] = "اللاعب الأبيض"
                 game.headers["Black"] = "اللاعب الأسود" if self.game_mode == "1vs1" else "الحاسوب"
                 
-                # إضافة نتيجة المباراة
                 if self.game_result == "كش مات":
                     game.headers["Result"] = "0-1" if self.board.turn else "1-0"
                 elif self.game_result == "استسلام":
@@ -1060,8 +1453,11 @@ class ProfessionalChessGame:
                     "✅ تم الحفظ بنجاح!", 
                     f"💾 تم حفظ المباراة في:\n📁 {filename}"
                 )
+                return True
             except Exception as e:
                 messagebox.showerror("❌ خطأ!", f"🚫 فشل في الحفظ:\n{str(e)}")
+                return False
+        return False
     
     def load_pgn_game(self):
         """رفع مباراة من ملف PGN"""
@@ -1086,6 +1482,7 @@ class ProfessionalChessGame:
                     self.game_mode = "1vs1"
                     self.game_started = True
                     self.game_result = None
+                    self.paused = False
                     self.create_game_interface()
                     
                     messagebox.showinfo("✅ تم التحميل!", "📂 تم تحميل المباراة بنجاح!")
@@ -1098,21 +1495,37 @@ class ProfessionalChessGame:
     def return_to_menu(self):
         """العودة للقائمة الرئيسية"""
         if self.board.move_stack and self.game_result is None:
-            result = messagebox.askyesno(
+            result = messagebox.askyesnocancel(
                 "🏠 تأكيد العودة",
-                "هل تريد العودة للقائمة الرئيسية؟\n\n⚠️ ستفقد المباراة الحالية!"
+                "هل تريد حفظ المباراة قبل العودة للقائمة الرئيسية؟"
             )
-            if not result:
+            if result is True:  # نعم - احفظ
+                if not self.save_pgn():
+                    return  # إذا فشل الحفظ، لا تعد للقائمة
+            elif result is None:  # إلغاء
                 return
+        
+        # إزالة شريط القوائم
+        self.window.config(menu="")
         
         for widget in self.window.winfo_children():
             widget.destroy()
             
+        # إعادة تعيين جميع المتغيرات
         self.game_started = False
         self.board = chess.Board()
         self.selected_square = None
         self.ai_thinking = False
         self.game_result = None
+        self.paused = False
+        
+        # إعادة تعيين متغيرات الواجهة
+        self.status_label = None
+        self.canvas = None
+        self.moves_count_label = None
+        self.game_status_label = None
+        self.board_orientation_label = None
+        self.pgn_text = None
         
         self.create_start_screen()
     
