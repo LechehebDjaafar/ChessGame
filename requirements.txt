@@ -1,0 +1,29 @@
+# Professional Chess Game - Dependencies
+# Author: Jaafar Lachehab (LechehebDjaafar)
+# GitHub: https://github.com/LechehebDjaafar
+
+# Core chess functionality - handles game logic, move validation, and PGN support
+python-chess>=1.999
+
+# Image processing library - for custom piece sets, board themes, and visual enhancements
+Pillow>=10.0.0
+
+# Note: The following are Python standard library modules (no installation required):
+# - tkinter (GUI framework)
+# - threading (non-blocking AI calculations) 
+# - asyncio (asynchronous chess engine operations)
+# - io (file and stream operations)
+# - os (operating system interface)
+# - time (timing functions)
+# - random (random number generation)
+# - messagebox, filedialog, scrolledtext (tkinter extensions)
+
+# Development dependencies (optional - uncomment if needed)
+# pytest>=7.0.0
+# pytest-cov>=4.0.0
+# black>=23.0.0
+# flake8>=6.0.0
+
+# Documentation dependencies (optional)
+# sphinx>=6.0.0
+# sphinx-rtd-theme>=1.2.0
