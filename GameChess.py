@@ -2,17 +2,19 @@ import tkinter as tk
 from tkinter import messagebox, filedialog, scrolledtext
 import chess
 import chess.pgn
+import chess.engine
 import random
 import threading
 import time
 import io
 from PIL import Image, ImageTk, ImageEnhance
 import os
+import asyncio
 
 class ProfessionalChessGame:
     def __init__(self):
         self.window = tk.Tk()
-        self.window.title("♔ لعبة الشطرنج الاحترافية ♔")
+        self.window.title("♔ لعبة الشطرنج الاحترافية مع Stockfish ♔")
         self.window.geometry("1000x800")
         self.window.resizable(False, False)
         self.window.configure(bg="#2E3440")
@@ -28,10 +30,19 @@ class ProfessionalChessGame:
         self.game_result = None
         self.paused = False
         
+        # متغيرات Stockfish
+        self.stockfish_path = "stockfish.exe"  # مسار محرك Stockfish
+        self.engine = None
+        self.stockfish_enabled = False
+        self.stockfish_skill_level = 10  # مستوى من 0-20
+        self.stockfish_elo = 1500  # ELO من 1320-3190
+        self.use_skill_level = True  # استخدام مستوى المهارة أم ELO
+        self.thinking_time = 1.0  # وقت التفكير بالثواني
+        
         # متغيرات التنقل في التاريخ
-        self.move_history = []  # تاريخ كامل للحركات
-        self.current_position = 0  # الموقع الحالي في التاريخ
-        self.in_review_mode = False  # وضع مراجعة المباراة
+        self.move_history = []
+        self.current_position = 0
+        self.in_review_mode = False
         
         # متغيرات عرض الحركات القانونية
         self.show_legal_moves = True
@@ -46,6 +57,7 @@ class ProfessionalChessGame:
         self.board_orientation_label = None
         self.pgn_text = None
         self.position_label = None
+        self.engine_status_label = None
         
         # متغيرات الصور
         self.piece_images = {}
@@ -57,9 +69,98 @@ class ProfessionalChessGame:
         # تحميل صور القطع
         self.load_local_piece_images()
         
+        # تهيئة Stockfish
+        self.initialize_stockfish()
+        
         # إنشاء واجهة البداية
         self.create_start_screen()
-        
+
+    def initialize_stockfish(self):
+        """تهيئة محرك Stockfish"""
+        try:
+            if os.path.exists(self.stockfish_path):
+                # استخدام مكتبة python-chess مع Stockfish
+                self.engine = chess.engine.SimpleEngine.popen_uci(self.stockfish_path)
+                self.configure_stockfish()
+                self.stockfish_enabled = True
+                print(f"✅ تم تحميل Stockfish بنجاح من: {self.stockfish_path}")
+            else:
+                print(f"❌ لم يتم العثور على Stockfish في: {self.stockfish_path}")
+                self.stockfish_enabled = False
+        except Exception as e:
+            print(f"❌ خطأ في تحميل Stockfish: {e}")
+            self.stockfish_enabled = False
+
+    def configure_stockfish(self):
+        """ضبط إعدادات Stockfish"""
+        if not self.engine:
+            return
+            
+        try:
+            config = {}
+            
+            if self.use_skill_level:
+                # استخدام مستوى المهارة (0-20)
+                config["Skill Level"] = self.stockfish_skill_level
+                config["UCI_LimitStrength"] = False
+            else:
+                # استخدام تقييد القوة بـ ELO
+                config["UCI_LimitStrength"] = True
+                config["UCI_Elo"] = self.stockfish_elo
+                
+            # إعدادات أداء محسنة
+            config["Threads"] = 2
+            config["Hash"] = 128
+            config["Minimum Thinking Time"] = int(self.thinking_time * 1000)
+            
+            self.engine.configure(config)
+            print(f"✅ تم ضبط Stockfish - المستوى: {self.stockfish_skill_level if self.use_skill_level else self.stockfish_elo}")
+            
+        except Exception as e:
+            print(f"❌ خطأ في ضبط Stockfish: {e}")
+
+    def get_stockfish_move(self):
+        """الحصول على حركة من Stockfish"""
+        if not self.engine or self.board.is_game_over():
+            return None
+            
+        try:
+            # تحديد حد الوقت للتفكير
+            limit = chess.engine.Limit(time=self.thinking_time)
+            
+            # الحصول على أفضل حركة
+            result = self.engine.play(self.board, limit)
+            return result.move if result else None
+            
+        except Exception as e:
+            print(f"❌ خطأ في الحصول على حركة Stockfish: {e}")
+            return None
+
+    def get_stockfish_evaluation(self):
+        """الحصول على تقييم الموقف من Stockfish"""
+        if not self.engine:
+            return None
+            
+        try:
+            info = self.engine.analyse(self.board, chess.engine.Limit(time=0.1))
+            score = info.get("score")
+            if score:
+                return score.white().score(mate_score=10000)
+            return None
+        except Exception as e:
+            print(f"❌ خطأ في تقييم Stockfish: {e}")
+            return None
+
+    def close_stockfish(self):
+        """إغلاق محرك Stockfish"""
+        if self.engine:
+            try:
+                self.engine.quit()
+                self.engine = None
+                print("✅ تم إغلاق Stockfish")
+            except Exception as e:
+                print(f"❌ خطأ في إغلاق Stockfish: {e}")
+
     def create_main_menu(self):
         """إنشاء شريط القوائم الرئيسي"""
         menubar = tk.Menu(self.window)
@@ -86,7 +187,7 @@ class ProfessionalChessGame:
         control_menu.add_command(label="💡 إظهار الحركات القانونية", command=self.toggle_show_moves)
         control_menu.add_command(label="🎯 تمييز آخر حركة", command=self.toggle_highlight_last_move)
         
-        # قائمة التنقل (جديدة)
+        # قائمة التنقل
         navigation_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="⏭️ التنقل", menu=navigation_menu)
         navigation_menu.add_command(label="⏪ البداية", command=self.go_to_start, accelerator="Home")
@@ -110,7 +211,7 @@ class ProfessionalChessGame:
         menubar.add_cascade(label="⚙️ إعدادات", menu=settings_menu)
         settings_menu.add_command(label="🎨 إعدادات الرقعة", command=self.show_board_settings)
         settings_menu.add_command(label="🖼️ إعدادات الصور", command=self.show_image_settings)
-        settings_menu.add_command(label="🎵 إعدادات الصوت", command=self.show_sound_settings)
+        settings_menu.add_command(label="🤖 إعدادات Stockfish", command=self.show_stockfish_settings)
         
         # قائمة المساعدة
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -123,6 +224,216 @@ class ProfessionalChessGame:
         
         # ربط اختصارات لوحة المفاتيح
         self.bind_keyboard_shortcuts()
+
+    def show_stockfish_settings(self):
+        """نافذة إعدادات Stockfish"""
+        settings_window = tk.Toplevel(self.window)
+        settings_window.title("🤖 إعدادات Stockfish")
+        settings_window.geometry("500x450")
+        settings_window.configure(bg="#3B4252")
+        settings_window.resizable(False, False)
+        
+        tk.Label(
+            settings_window,
+            text="🤖 إعدادات محرك Stockfish",
+            font=("Arial", 18, "bold"),
+            bg="#3B4252",
+            fg="#ECEFF4"
+        ).pack(pady=20)
+        
+        # حالة المحرك
+        status_frame = tk.LabelFrame(
+            settings_window, 
+            text="📊 حالة المحرك", 
+            bg="#3B4252", 
+            fg="#88C0D0"
+        )
+        status_frame.pack(padx=20, pady=10, fill=tk.X)
+        
+        status_text = "🟢 متصل ويعمل" if self.stockfish_enabled else "🔴 غير متصل"
+        tk.Label(
+            status_frame,
+            text=f"الحالة: {status_text}",
+            bg="#3B4252",
+            fg="#ECEFF4"
+        ).pack(pady=5)
+        
+        tk.Label(
+            status_frame,
+            text=f"المسار: {self.stockfish_path}",
+            bg="#3B4252",
+            fg="#D8DEE9"
+        ).pack(pady=5)
+        
+        # إعدادات المستوى
+        level_frame = tk.LabelFrame(
+            settings_window, 
+            text="🎯 مستوى الصعوبة", 
+            bg="#3B4252", 
+            fg="#88C0D0"
+        )
+        level_frame.pack(padx=20, pady=10, fill=tk.X)
+        
+        # اختيار نوع التحكم
+        control_type_var = tk.BooleanVar(value=self.use_skill_level)
+        tk.Checkbutton(
+            level_frame,
+            text="استخدام مستوى المهارة (بدلاً من ELO)",
+            variable=control_type_var,
+            bg="#3B4252",
+            fg="#ECEFF4",
+            selectcolor="#434C5E"
+        ).pack(anchor=tk.W, padx=10, pady=5)
+        
+        # مستوى المهارة (0-20)
+        skill_frame = tk.Frame(level_frame, bg="#3B4252")
+        skill_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        tk.Label(
+            skill_frame,
+            text="مستوى المهارة (0=مبتدئ، 20=خبير):",
+            bg="#3B4252",
+            fg="#D8DEE9"
+        ).pack(anchor=tk.W)
+        
+        skill_var = tk.IntVar(value=self.stockfish_skill_level)
+        skill_scale = tk.Scale(
+            skill_frame,
+            from_=0, to=20,
+            orient=tk.HORIZONTAL,
+            variable=skill_var,
+            bg="#434C5E",
+            fg="#ECEFF4"
+        )
+        skill_scale.pack(fill=tk.X)
+        
+        # مستوى ELO (1320-3190)
+        elo_frame = tk.Frame(level_frame, bg="#3B4252")
+        elo_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        tk.Label(
+            elo_frame,
+            text="تقييم ELO (1320-3190):",
+            bg="#3B4252",
+            fg="#D8DEE9"
+        ).pack(anchor=tk.W)
+        
+        elo_var = tk.IntVar(value=self.stockfish_elo)
+        elo_scale = tk.Scale(
+            elo_frame,
+            from_=1320, to=3190,
+            orient=tk.HORIZONTAL,
+            variable=elo_var,
+            bg="#434C5E",
+            fg="#ECEFF4"
+        )
+        elo_scale.pack(fill=tk.X)
+        
+        # وقت التفكير
+        time_frame = tk.Frame(level_frame, bg="#3B4252")
+        time_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        tk.Label(
+            time_frame,
+            text="وقت التفكير (ثواني):",
+            bg="#3B4252",
+            fg="#D8DEE9"
+        ).pack(anchor=tk.W)
+        
+        time_var = tk.DoubleVar(value=self.thinking_time)
+        time_scale = tk.Scale(
+            time_frame,
+            from_=0.1, to=5.0,
+            resolution=0.1,
+            orient=tk.HORIZONTAL,
+            variable=time_var,
+            bg="#434C5E",
+            fg="#ECEFF4"
+        )
+        time_scale.pack(fill=tk.X)
+        
+        # إعادة تحديد المسار
+        path_frame = tk.Frame(settings_window, bg="#3B4252")
+        path_frame.pack(padx=20, pady=10, fill=tk.X)
+        
+        tk.Button(
+            path_frame,
+            text="📁 تغيير مسار Stockfish",
+            bg="#5E81AC",
+            fg="white",
+            command=lambda: self.change_stockfish_path(settings_window)
+        ).pack(side=tk.LEFT, padx=5)
+        
+        tk.Button(
+            path_frame,
+            text="🔄 إعادة تحميل المحرك",
+            bg="#D08770",
+            fg="white",
+            command=lambda: self.reload_stockfish(settings_window)
+        ).pack(side=tk.LEFT, padx=5)
+        
+        # أزرار التحكم
+        btn_frame = tk.Frame(settings_window, bg="#3B4252")
+        btn_frame.pack(pady=20)
+        
+        tk.Button(
+            btn_frame,
+            text="✅ تطبيق",
+            bg="#A3BE8C",
+            fg="white",
+            font=("Arial", 12, "bold"),
+            command=lambda: self.apply_stockfish_settings(
+                control_type_var.get(),
+                skill_var.get(),
+                elo_var.get(),
+                time_var.get(),
+                settings_window
+            )
+        ).pack(side=tk.LEFT, padx=10)
+        
+        tk.Button(
+            btn_frame,
+            text="❌ إلغاء",
+            bg="#BF616A",
+            fg="white",
+            font=("Arial", 12, "bold"),
+            command=settings_window.destroy
+        ).pack(side=tk.LEFT, padx=10)
+
+    def change_stockfish_path(self, parent_window):
+        """تغيير مسار Stockfish"""
+        new_path = filedialog.askopenfilename(
+            title="اختر ملف Stockfish التنفيذي",
+            filetypes=[("ملفات تنفيذية", "*.exe"), ("جميع الملفات", "*.*")]
+        )
+        
+        if new_path:
+            self.stockfish_path = new_path
+            messagebox.showinfo("✅ تم التحديث", f"تم تحديث مسار Stockfish:\n{new_path}")
+
+    def reload_stockfish(self, parent_window):
+        """إعادة تحميل محرك Stockfish"""
+        self.close_stockfish()
+        self.initialize_stockfish()
+        
+        if self.stockfish_enabled:
+            messagebox.showinfo("✅ نجح التحميل", "تم إعادة تحميل Stockfish بنجاح!")
+        else:
+            messagebox.showerror("❌ فشل التحميل", "فشل في إعادة تحميل Stockfish!")
+
+    def apply_stockfish_settings(self, use_skill, skill_level, elo_level, thinking_time, window):
+        """تطبيق إعدادات Stockfish"""
+        self.use_skill_level = use_skill
+        self.stockfish_skill_level = skill_level
+        self.stockfish_elo = elo_level
+        self.thinking_time = thinking_time
+        
+        # إعادة ضبط المحرك
+        if self.stockfish_enabled:
+            self.configure_stockfish()
+        
+        window.destroy()
+        messagebox.showinfo("✅ تم التطبيق", "تم تطبيق إعدادات Stockfish بنجاح!")
 
     def bind_keyboard_shortcuts(self):
         """ربط اختصارات لوحة المفاتيح"""
@@ -141,7 +452,6 @@ class ProfessionalChessGame:
         self.window.bind('<Home>', lambda e: self.go_to_start())
         self.window.bind('<End>', lambda e: self.go_to_end())
         
-        # التركيز على النافذة
         self.window.focus_set()
 
     # ================ دوال التنقل في تاريخ المباراة ================
@@ -149,7 +459,6 @@ class ProfessionalChessGame:
     def save_move_to_history(self, move):
         """حفظ الحركة في التاريخ"""
         if not self.in_review_mode:
-            # إضافة الحركة الجديدة إلى التاريخ
             self.move_history.append({
                 'move': move,
                 'board_state': self.board.copy(),
@@ -164,7 +473,7 @@ class ProfessionalChessGame:
             return
             
         self.current_position = 0
-        self.board = chess.Board()  # رقعة فارغة
+        self.board = chess.Board()
         self.last_move = None
         self.in_review_mode = True
         self.update_board_display()
@@ -188,7 +497,7 @@ class ProfessionalChessGame:
             
         self.current_position = len(self.move_history)
         self.update_position_from_history()
-        self.in_review_mode = False  # العودة لوضع اللعب العادي
+        self.in_review_mode = False
 
     def update_position_from_history(self):
         """تحديث موقع الرقعة من التاريخ"""
@@ -196,7 +505,6 @@ class ProfessionalChessGame:
             self.board = chess.Board()
             self.last_move = None
         else:
-            # إعادة بناء الرقعة حتى الموقع المحدد
             self.board = chess.Board()
             for i in range(self.current_position):
                 if i < len(self.move_history):
@@ -217,7 +525,7 @@ class ProfessionalChessGame:
     def toggle_review_mode(self):
         """تبديل وضع المراجعة"""
         if self.in_review_mode:
-            self.go_to_end()  # العودة لنهاية المباراة
+            self.go_to_end()
         else:
             self.in_review_mode = True
         
@@ -252,92 +560,6 @@ class ProfessionalChessGame:
                 legal_moves.append(move.to_square)
         return legal_moves
 
-    def show_piece_moves(self):
-        """عرض نافذة حركات القطع"""
-        moves_window = tk.Toplevel(self.window)
-        moves_window.title("🎯 حركات قطع الشطرنج")
-        moves_window.geometry("700x600")
-        moves_window.configure(bg="#3B4252")
-        
-        moves_text = scrolledtext.ScrolledText(
-            moves_window,
-            bg="#434C5E", fg="#ECEFF4",
-            font=("Arial", 11),
-            wrap=tk.WORD
-        )
-        moves_text.pack(padx=20, pady=20, fill=tk.BOTH, expand=True)
-        
-        moves_content = """
-🎯 حركات قطع الشطرنج التفصيلية:
-
-♔ الملك (King):
-• يتحرك مربعاً واحداً في أي اتجاه (أفقي، عمودي، قطري)
-• هو أهم قطعة - لا يمكن أسره، وإذا تعرض للتهديد فهذا "كش"
-• له حركة خاصة تسمى "التبييت" مع الرخ
-• القيمة: لا تُقدر (أهم من كل شيء)
-
-♕ الملكة/الوزير (Queen):
-• تجمع حركات الرخ والفيل معاً
-• تتحرك أفقياً وعمودياً وقطرياً لأي عدد من المربعات
-• أقوى قطعة على الرقعة
-• القيمة: 9 نقاط
-
-♖ الرخ/القلعة (Rook):
-• يتحرك أفقياً وعمودياً لأي عدد من المربعات
-• لا يستطيع القفز فوق القطع الأخرى
-• له حركة خاصة تسمى "التبييت" مع الملك
-• القيمة: 5 نقاط
-
-♗ الفيل (Bishop):
-• يتحرك قطرياً فقط لأي عدد من المربعات
-• لا يستطيع القفز فوق القطع الأخرى
-• فيل المربعات البيضاء يبقى على البيضاء دائماً
-• فيل المربعات السوداء يبقى على السوداء دائماً
-• القيمة: 3 نقاط
-
-♘ الحصان (Knight):
-• يتحرك على شكل حرف "L"
-• مربعين في اتجاه ثم مربع واحد عمودياً عليه
-• القطعة الوحيدة التي تستطيع القفز فوق القطع الأخرى
-• دائماً ينتقل من مربع أبيض إلى أسود أو العكس
-• القيمة: 3 نقاط
-
-♙ البيدق (Pawn):
-• يتحرك للأمام مربعاً واحداً فقط
-• في أول حركة له يمكن أن يتحرك مربعين
-• يأسر قطرياً (ليس للأمام)
-• له حركات خاصة: "الأسر بالمرور" و "الترقية"
-• عند وصوله للصف الأخير يترقى لأي قطعة (عادة ملكة)
-• القيمة: 1 نقطة
-
-🎮 حركات خاصة:
-
-🏰 التبييت (Castling):
-• حركة خاصة بين الملك والرخ
-• الملك يتحرك مربعين نحو الرخ
-• الرخ ينتقل للجانب الآخر من الملك
-• شروط: لم يتحرك الملك أو الرخ من قبل، المربعات بينهما فارغة
-
-👻 الأسر بالمرور (En Passant):
-• حركة خاصة للبيدق
-• عندما يتحرك بيدق الخصم مربعين ويصبح بجانب بيدقك
-• يمكن أسره كأنه تحرك مربعاً واحداً فقط
-
-⬆️ ترقية البيدق (Pawn Promotion):
-• عندما يصل البيدق للصف الأخير
-• يجب ترقيته لقطعة أخرى (ملكة، رخ، فيل، أو حصان)
-• عادة يُرقى إلى ملكة لأنها الأقوى
-
-💡 نصائح مهمة:
-• لا يمكن تحريك قطعة إذا كان سيعرض ملكك للخطر
-• إذا كان ملكك في "كش" يجب إزالة التهديد فوراً
-• "كش مات" يعني أن الملك مهدد ولا يمكن إنقاذه
-• "تعادل" يحدث عندما لا توجد حركات قانونية والملك ليس في كش
-        """
-        
-        moves_text.insert(1.0, moves_content)
-        moves_text.configure(state=tk.DISABLED)
-
     def toggle_pause(self):
         """تبديل حالة الإيقاف المؤقت"""
         if not self.game_started or self.game_result is not None or self.status_label is None:
@@ -362,14 +584,14 @@ class ProfessionalChessGame:
             self.update_status()
 
     def show_game_stats(self):
-        """عرض إحصائيات المباراة"""
+        """عرض إحصائيات المباراة مع تقييم Stockfish"""
         if not self.game_started:
             messagebox.showinfo("⚠️ تنبيه", "لا توجد مباراة جارية!")
             return
             
         stats_window = tk.Toplevel(self.window)
         stats_window.title("📊 إحصائيات المباراة")
-        stats_window.geometry("400x350")
+        stats_window.geometry("450x400")
         stats_window.configure(bg="#3B4252")
         
         move_count = len(self.move_history)
@@ -379,10 +601,26 @@ class ProfessionalChessGame:
         # حساب القطع المأسورة
         captured_pieces = self.get_captured_pieces_detailed()
         
+        # تقييم Stockfish للموقف الحالي
+        evaluation = ""
+        if self.stockfish_enabled:
+            eval_score = self.get_stockfish_evaluation()
+            if eval_score is not None:
+                if abs(eval_score) > 9000:  # مات
+                    mate_in = (10000 - abs(eval_score)) if eval_score > 0 else -(10000 - abs(eval_score))
+                    evaluation = f"🤖 تقييم Stockfish: مات في {abs(mate_in)} {'للأبيض' if mate_in > 0 else 'للأسود'}"
+                else:
+                    eval_text = f"+{eval_score/100:.1f}" if eval_score > 0 else f"{eval_score/100:.1f}"
+                    evaluation = f"🤖 تقييم Stockfish: {eval_text}"
+            else:
+                evaluation = "🤖 تقييم Stockfish: غير متاح"
+        else:
+            evaluation = "🤖 Stockfish: غير متصل"
+        
         stats_text = f"""
 📊 إحصائيات المباراة الحالية:
 
-🎮 وضع اللعب: {'لاعب ضد لاعب' if self.game_mode == '1vs1' else 'لاعب ضد الحاسوب'}
+🎮 وضع اللعب: {'لاعب ضد لاعب' if self.game_mode == '1vs1' else 'لاعب ضد Stockfish'}
 
 📈 عدد الحركات الإجمالي: {move_count}
 ⚪ حركات الأبيض: {white_moves}
@@ -396,6 +634,8 @@ class ProfessionalChessGame:
 
 📍 موقع المراجعة: {self.current_position}/{len(self.move_history)}
 🔍 وضع المراجعة: {'مفعل' if self.in_review_mode else 'معطل'}
+
+{evaluation}
 
 {captured_pieces}
 """
@@ -544,7 +784,7 @@ class ProfessionalChessGame:
             settings_changed = True
             
         if settings_changed and self.canvas:
-            if new_size != 80:  # إذا تغير الحجم
+            if new_size != 80:
                 self.canvas.configure(
                     width=8 * self.square_size + 40,
                     height=8 * self.square_size + 40
@@ -581,10 +821,6 @@ class ProfessionalChessGame:
             bg="#5E81AC", fg="white",
             command=self.change_images_folder
         ).pack(pady=10)
-
-    def show_sound_settings(self):
-        """إعدادات الصوت"""
-        messagebox.showinfo("🎵 إعدادات الصوت", "إعدادات الصوت قيد التطوير!")
 
     def show_chess_rules(self):
         """عرض قواعد الشطرنج"""
@@ -634,6 +870,92 @@ class ProfessionalChessGame:
         rules_text.insert(1.0, rules_content)
         rules_text.configure(state=tk.DISABLED)
 
+    def show_piece_moves(self):
+        """عرض نافذة حركات القطع"""
+        moves_window = tk.Toplevel(self.window)
+        moves_window.title("🎯 حركات قطع الشطرنج")
+        moves_window.geometry("700x600")
+        moves_window.configure(bg="#3B4252")
+        
+        moves_text = scrolledtext.ScrolledText(
+            moves_window,
+            bg="#434C5E", fg="#ECEFF4",
+            font=("Arial", 11),
+            wrap=tk.WORD
+        )
+        moves_text.pack(padx=20, pady=20, fill=tk.BOTH, expand=True)
+        
+        moves_content = """
+🎯 حركات قطع الشطرنج التفصيلية:
+
+♔ الملك (King):
+• يتحرك مربعاً واحداً في أي اتجاه (أفقي، عمودي، قطري)
+• هو أهم قطعة - لا يمكن أسره، وإذا تعرض للتهديد فهذا "كش"
+• له حركة خاصة تسمى "التبييت" مع الرخ
+• القيمة: لا تُقدر (أهم من كل شيء)
+
+♕ الملكة/الوزير (Queen):
+• تجمع حركات الرخ والفيل معاً
+• تتحرك أفقياً وعمودياً وقطرياً لأي عدد من المربعات
+• أقوى قطعة على الرقعة
+• القيمة: 9 نقاط
+
+♖ الرخ/القلعة (Rook):
+• يتحرك أفقياً وعمودياً لأي عدد من المربعات
+• لا يستطيع القفز فوق القطع الأخرى
+• له حركة خاصة تسمى "التبييت" مع الملك
+• القيمة: 5 نقاط
+
+♗ الفيل (Bishop):
+• يتحرك قطرياً فقط لأي عدد من المربعات
+• لا يستطيع القفز فوق القطع الأخرى
+• فيل المربعات البيضاء يبقى على البيضاء دائماً
+• فيل المربعات السوداء يبقى على السوداء دائماً
+• القيمة: 3 نقاط
+
+♘ الحصان (Knight):
+• يتحرك على شكل حرف "L"
+• مربعين في اتجاه ثم مربع واحد عمودياً عليه
+• القطعة الوحيدة التي تستطيع القفز فوق القطع الأخرى
+• دائماً ينتقل من مربع أبيض إلى أسود أو العكس
+• القيمة: 3 نقاط
+
+♙ البيدق (Pawn):
+• يتحرك للأمام مربعاً واحداً فقط
+• في أول حركة له يمكن أن يتحرك مربعين
+• يأسر قطرياً (ليس للأمام)
+• له حركات خاصة: "الأسر بالمرور" و "الترقية"
+• عند وصوله للصف الأخير يترقى لأي قطعة (عادة ملكة)
+• القيمة: 1 نقطة
+
+🎮 حركات خاصة:
+
+🏰 التبييت (Castling):
+• حركة خاصة بين الملك والرخ
+• الملك يتحرك مربعين نحو الرخ
+• الرخ ينتقل للجانب الآخر من الملك
+• شروط: لم يتحرك الملك أو الرخ من قبل، المربعات بينهما فارغة
+
+👻 الأسر بالمرور (En Passant):
+• حركة خاصة للبيدق
+• عندما يتحرك بيدق الخصم مربعين ويصبح بجانب بيدقك
+• يمكن أسره كأنه تحرك مربعاً واحداً فقط
+
+⬆️ ترقية البيدق (Pawn Promotion):
+• عندما يصل البيدق للصف الأخير
+• يجب ترقيته لقطعة أخرى (ملكة، رخ، فيل، أو حصان)
+• عادة يُرقى إلى ملكة لأنها الأقوى
+
+💡 نصائح مهمة:
+• لا يمكن تحريك قطعة إذا كان سيعرض ملكك للخطر
+• إذا كان ملكك في "كش" يجب إزالة التهديد فوراً
+• "كش مات" يعني أن الملك مهدد ولا يمكن إنقاذه
+• "تعادل" يحدث عندما لا توجد حركات قانونية والملك ليس في كش
+        """
+        
+        moves_text.insert(1.0, moves_content)
+        moves_text.configure(state=tk.DISABLED)
+
     def show_keyboard_shortcuts(self):
         """عرض اختصارات لوحة المفاتيح"""
         shortcuts_window = tk.Toplevel(self.window)
@@ -678,23 +1000,188 @@ Alt + F4        خروج من البرنامج
             justify=tk.LEFT
         ).pack(padx=20, pady=20)
 
+
+
     def show_about(self):
-        """عرض معلومات البرنامج"""
-        messagebox.showinfo(
-            "ℹ️ حول البرنامج",
-            "♔ لعبة الشطرنج الاحترافية ♛\n\n"
-            "🔧 تطوير: مساعد الذكي الاصطناعي\n"
-            "📅 الإصدار: 3.0 المتقدم\n"
-            "🐍 Python + Tkinter + python-chess\n\n"
-            "✨ مميزات جديدة:\n"
-            "• عرض الحركات القانونية\n"
-            "• التنقل في تاريخ المباراة\n"
-            "• وضع المراجعة المتقدم\n"
-            "• واجهة احترافية\n"
-            "• دعم PGN كامل\n"
-            "• تحكم متقدم\n\n"
-            "🎯 استمتع باللعب!"
+        """عرض معلومات البرنامج والمطور"""
+        about_text = "♔ لعبة الشطرنج الاحترافية مع Stockfish ♛\n\n"
+        
+        # معلومات المطور
+        about_text += "👨‍💻 المطور: لشهب جعفر\n"
+        about_text += "🇩🇿 من: الجزائر\n"
+        about_text += "🎓 مهندس إعلام آلي أساسي\n"
+        about_text += "⚙️ صانع محركات\n"
+        about_text += "♟️ لاعب شطرنج\n\n"
+        
+        # معلومات البرنامج
+        about_text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        about_text += "📅 الإصدار: 4.0 - طبعة Stockfish\n"
+        about_text += "🐍 التقنيات المستخدمة:\n"
+        about_text += "   • Python + Tkinter\n"
+        about_text += "   • python-chess Library\n"
+        about_text += "   • Stockfish Engine\n"
+        about_text += "   • PIL (Python Imaging Library)\n\n"
+        
+        # المميزات
+        about_text += "✨ المميزات الرئيسية:\n"
+        about_text += "🤖 • دعم محرك Stockfish الاحترافي\n"
+        about_text += "📊 • مستويات صعوبة قابلة للتعديل (0-20)\n"
+        about_text += "🎯 • تقييم المواقف في الوقت الفعلي\n"
+        about_text += "💡 • عرض الحركات القانونية التفاعلية\n"
+        about_text += "⏭️ • التنقل في تاريخ المباراة\n"
+        about_text += "🔍 • وضع المراجعة المتقدم\n"
+        about_text += "🎨 • واجهة احترافية وأنيقة\n"
+        about_text += "📝 • دعم PGN كامل للحفظ والتحميل\n"
+        about_text += "🖼️ • دعم صور القطع عالية الجودة\n"
+        about_text += "⌨️ • اختصارات لوحة مفاتيح شاملة\n\n"
+        
+        # حالة Stockfish
+        about_text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        if self.stockfish_enabled:
+            about_text += "🤖 حالة Stockfish: متصل ويعمل بكفاءة\n"
+            level_info = f"مستوى {self.stockfish_skill_level}" if self.use_skill_level else f"ELO {self.stockfish_elo}"
+            about_text += f"📊 المستوى الحالي: {level_info}\n"
+            about_text += f"⏱️ وقت التفكير: {self.thinking_time} ثانية\n\n"
+        else:
+            about_text += "🤖 حالة Stockfish: غير متصل\n"
+            about_text += "💡 نصيحة: ضع ملف stockfish.exe في مجلد البرنامج\n\n"
+        
+        # رسالة ختامية
+        about_text += "🎯 استمتع باللعب ضد أقوى محرك شطرنج في العالم!\n"
+        about_text += "🌟 صُنع بحب وإتقان في الجزائر"
+        
+        # إنشاء نافذة مخصصة لعرض المعلومات
+        about_window = tk.Toplevel(self.window)
+        about_window.title("ℹ️ حول البرنامج والمطور")
+        about_window.geometry("600x700")
+        about_window.configure(bg="#2E3440")
+        about_window.resizable(False, False)
+        
+        # إضافة أيقونة الجزائر إذا كانت متاحة
+        try:
+            # يمكن إضافة أيقونة هنا إذا كانت متوفرة
+            pass
+        except:
+            pass
+        
+        # إطار العنوان
+        title_frame = tk.Frame(about_window, bg="#2E3440")
+        title_frame.pack(pady=20)
+        
+        title_label = tk.Label(
+            title_frame,
+            text="♔ لعبة الشطرنج الاحترافية ♛",
+            font=("Arial", 20, "bold"),
+            bg="#2E3440",
+            fg="#ECEFF4"
         )
+        title_label.pack()
+        
+        # شعار الجزائر
+        algeria_label = tk.Label(
+            title_frame,
+            text="🇩🇿 صُنع في الجزائر 🇩🇿",
+            font=("Arial", 14, "bold"),
+            bg="#2E3440",
+            fg="#A3BE8C"
+        )
+        algeria_label.pack(pady=5)
+        
+        # النص الرئيسي مع إمكانية التمرير
+        text_frame = tk.Frame(about_window, bg="#3B4252", relief=tk.RAISED, bd=2)
+        text_frame.pack(padx=20, pady=10, fill=tk.BOTH, expand=True)
+        
+        text_widget = scrolledtext.ScrolledText(
+            text_frame,
+            wrap=tk.WORD,
+            width=70,
+            height=25,
+            font=("Consolas", 11),
+            bg="#434C5E",
+            fg="#ECEFF4",
+            selectbackground="#5E81AC",
+            selectforeground="#ECEFF4",
+            relief=tk.FLAT,
+            bd=0
+        )
+        text_widget.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+        
+        # إدراج النص
+        text_widget.insert(1.0, about_text)
+        text_widget.configure(state=tk.DISABLED)
+        
+        # أزرار التفاعل
+        button_frame = tk.Frame(about_window, bg="#2E3440")
+        button_frame.pack(pady=15)
+        
+        # زر نسخ المعلومات
+        copy_btn = tk.Button(
+            button_frame,
+            text="📋 نسخ المعلومات",
+            font=("Arial", 12, "bold"),
+            bg="#5E81AC",
+            fg="white",
+            padx=20,
+            pady=8,
+            relief=tk.RAISED,
+            bd=3,
+            command=lambda: self.copy_about_info(about_text)
+        )
+        copy_btn.pack(side=tk.LEFT, padx=10)
+        
+        # زر إعدادات Stockfish
+        if self.stockfish_enabled:
+            settings_btn = tk.Button(
+                button_frame,
+                text="🤖 إعدادات Stockfish",
+                font=("Arial", 12, "bold"),
+                bg="#BF616A",
+                fg="white",
+                padx=20,
+                pady=8,
+                relief=tk.RAISED,
+                bd=3,
+                command=lambda: [about_window.destroy(), self.show_stockfish_settings()]
+            )
+            settings_btn.pack(side=tk.LEFT, padx=10)
+        
+        # زر إغلاق
+        close_btn = tk.Button(
+            button_frame,
+            text="✅ إغلاق",
+            font=("Arial", 12, "bold"),
+            bg="#A3BE8C",
+            fg="white",
+            padx=20,
+            pady=8,
+            relief=tk.RAISED,
+            bd=3,
+            command=about_window.destroy
+        )
+        close_btn.pack(side=tk.LEFT, padx=10)
+        
+        # تأثيرات بصرية للأزرار
+        for btn in [copy_btn, close_btn] + ([settings_btn] if self.stockfish_enabled else []):
+            btn.bind("<Enter>", lambda e, b=btn: b.config(relief=tk.GROOVE))
+            btn.bind("<Leave>", lambda e, b=btn: b.config(relief=tk.RAISED))
+        
+        # جعل النافذة في المقدمة
+        about_window.transient(self.window)
+        about_window.grab_set()
+        about_window.focus_set()
+
+    def copy_about_info(self, text):
+        """نسخ معلومات البرنامج إلى الحافظة"""
+        try:
+            self.window.clipboard_clear()
+            self.window.clipboard_append(text)
+            messagebox.showinfo("✅ تم النسخ", "تم نسخ معلومات البرنامج والمطور إلى الحافظة!")
+        except Exception as e:
+            messagebox.showerror("❌ خطأ", f"فشل في النسخ: {str(e)}")
+
+
+
+
 
     def quit_application(self):
         """خروج من التطبيق مع تأكيد"""
@@ -705,10 +1192,13 @@ Alt + F4        خروج من البرنامج
             )
             if result is True:
                 if self.save_pgn():
+                    self.close_stockfish()
                     self.window.quit()
             elif result is False:
+                self.close_stockfish()
                 self.window.quit()
         else:
+            self.close_stockfish()
             self.window.quit()
 
     def change_images_folder(self):
@@ -809,8 +1299,8 @@ Alt + F4        خروج من البرنامج
         
         title_label = tk.Label(
             title_frame,
-            text="♔ لعبة الشطرنج الاحترافية ♛",
-            font=("Arial", 28, "bold"),
+            text="♔ لعبة الشطرنج الاحترافية مع Stockfish ♛",
+            font=("Arial", 26, "bold"),
             bg="#2E3440",
             fg="#ECEFF4",
             relief=tk.RAISED,
@@ -818,9 +1308,11 @@ Alt + F4        خروج من البرنامج
         )
         title_label.pack()
         
+        # عرض حالة Stockfish
+        stockfish_status = "🟢 Stockfish متصل" if self.stockfish_enabled else "🔴 Stockfish غير متصل"
         subtitle_label = tk.Label(
             title_frame,
-            text="🎯 تجربة شطرنج احترافية مع رسوميات عالية الجودة والحركات القانونية",
+            text=f"🎯 تجربة شطرنج احترافية مع أقوى محرك في العالم\n{stockfish_status}",
             font=("Arial", 14),
             bg="#2E3440",
             fg="#D8DEE9"
@@ -832,7 +1324,7 @@ Alt + F4        خروج من البرنامج
         
         buttons_config = [
             ("🎮 لاعب ضد لاعب", "#5E81AC", lambda: self.start_game("1vs1")),
-            ("🤖 لاعب ضد الحاسوب", "#BF616A", lambda: self.start_game("1vsAI")),
+            ("🤖 لاعب ضد Stockfish", "#BF616A", lambda: self.start_game("1vsAI")),
             ("📁 رفع مباراة PGN", "#A3BE8C", self.load_pgn_game),
             ("⚙️ الإعدادات", "#B48EAD", self.show_settings)
         ]
@@ -856,7 +1348,7 @@ Alt + F4        خروج من البرنامج
         """نافذة الإعدادات الأساسية"""
         settings_window = tk.Toplevel(self.window)
         settings_window.title("⚙️ إعدادات اللعبة")
-        settings_window.geometry("400x350")
+        settings_window.geometry("400x400")
         settings_window.configure(bg="#3B4252")
         settings_window.resizable(False, False)
         
@@ -868,6 +1360,32 @@ Alt + F4        خروج من البرنامج
             fg="#ECEFF4"
         ).pack(pady=20)
         
+        # إعدادات سريعة
+        quick_frame = tk.LabelFrame(settings_window, text="⚡ إعدادات سريعة", bg="#3B4252", fg="#88C0D0")
+        quick_frame.pack(padx=20, pady=10, fill=tk.X)
+        
+        tk.Button(
+            quick_frame,
+            text="🎨 إعدادات الرقعة والعرض",
+            bg="#5E81AC", fg="white",
+            command=self.show_board_settings
+        ).pack(pady=5, fill=tk.X, padx=10)
+        
+        tk.Button(
+            quick_frame,
+            text="🤖 إعدادات Stockfish",
+            bg="#BF616A", fg="white",
+            command=self.show_stockfish_settings
+        ).pack(pady=5, fill=tk.X, padx=10)
+        
+        tk.Button(
+            quick_frame,
+            text="🖼️ إعدادات الصور",
+            bg="#A3BE8C", fg="white",
+            command=self.show_image_settings
+        ).pack(pady=5, fill=tk.X, padx=10)
+        
+        # حجم الرقعة السريع
         size_frame = tk.Frame(settings_window, bg="#3B4252")
         size_frame.pack(pady=10)
         
@@ -1002,9 +1520,10 @@ Alt + F4        خروج من البرنامج
         status_frame = tk.Frame(parent, bg="#434C5E", relief=tk.RAISED, bd=2)
         status_frame.pack(fill=tk.X, padx=10, pady=10)
         
+        mode_text = "لاعب ضد لاعب" if self.game_mode == "1vs1" else "لاعب ضد Stockfish"
         self.status_label = tk.Label(
             status_frame,
-            text=f"🎯 دور الأبيض - الوضع: {'لاعب ضد لاعب' if self.game_mode == '1vs1' else 'لاعب ضد الحاسوب'}",
+            text=f"🎯 دور الأبيض - الوضع: {mode_text}",
             font=("Arial", 14, "bold"),
             bg="#434C5E",
             fg="#ECEFF4",
@@ -1169,10 +1688,10 @@ Alt + F4        خروج من البرنامج
         """تحديث PGN مع نتيجة المباراة"""
         try:
             game = chess.pgn.Game.from_board(self.board)
-            game.headers["Event"] = "مباراة احترافية"
+            game.headers["Event"] = "مباراة احترافية مع Stockfish"
             game.headers["Date"] = time.strftime("%Y.%m.%d")
             game.headers["White"] = "اللاعب الأبيض"
-            game.headers["Black"] = "اللاعب الأسود" if self.game_mode == "1vs1" else "الحاسوب"
+            game.headers["Black"] = "اللاعب الأسود" if self.game_mode == "1vs1" else "Stockfish"
             
             if result_type == "استسلام":
                 if winner == "الأبيض":
@@ -1253,6 +1772,16 @@ Alt + F4        خروج من البرنامج
         )
         self.position_label.pack(pady=3)
         
+        # حالة Stockfish
+        self.engine_status_label = tk.Label(
+            info_frame,
+            text=f"🤖 {'متصل' if self.stockfish_enabled else 'غير متصل'}",
+            font=("Arial", 11),
+            bg="#3B4252",
+            fg="#A3BE8C" if self.stockfish_enabled else "#BF616A"
+        )
+        self.engine_status_label.pack(pady=3)
+        
         # أزرار التنقل
         nav_frame = tk.LabelFrame(
             self.tools_frame,
@@ -1302,7 +1831,7 @@ Alt + F4        خروج من البرنامج
         
         self.pgn_text = scrolledtext.ScrolledText(
             pgn_frame,
-            height=10,
+            height=8,
             width=30,
             font=("Consolas", 10),
             bg="#434C5E",
@@ -1690,31 +2219,38 @@ Alt + F4        خروج من البرنامج
     def make_move(self, move):
         """تنفيذ حركة والتحقق من حالة اللعبة"""
         self.board.push(move)
-        self.save_move_to_history(move)  # حفظ في التاريخ
+        self.save_move_to_history(move)
         self.check_game_status()
         
         if (self.game_mode == "1vsAI" and 
             self.board.turn == chess.BLACK and 
             not self.board.is_game_over() and
             self.game_result is None):
-            self.window.after(500, self.ai_move)
+            self.window.after(500, self.stockfish_move)
     
-    def ai_move(self):
-        """حركة الحاسوب العشوائية"""
+    def stockfish_move(self):
+        """حركة Stockfish بدلاً من العشوائية"""
         if self.game_result is not None or self.paused:
             return
             
         self.ai_thinking = True
         if self.status_label:
+            status_text = "🤖 Stockfish يفكر..." if self.stockfish_enabled else "🎲 الحاسوب يفكر..."
             self.status_label.config(
-                text="🤔 الحاسوب يفكر...",
+                text=status_text,
                 fg="#D08770"
             )
         
         def think_and_move():
-            thinking_time = random.uniform(1.0, 3.0)
-            time.sleep(thinking_time)
+            if self.stockfish_enabled:
+                # استخدام Stockfish للحصول على أفضل حركة
+                move = self.get_stockfish_move()
+                if move:
+                    self.window.after(0, lambda: self.execute_ai_move(move))
+                    return
             
+            # العودة للحركة العشوائية إذا فشل Stockfish
+            time.sleep(random.uniform(1.0, 2.0))
             if not self.board.is_game_over() and self.game_result is None and not self.paused:
                 legal_moves = list(self.board.legal_moves)
                 if legal_moves:
@@ -1726,12 +2262,12 @@ Alt + F4        خروج من البرنامج
         thread.start()
     
     def execute_ai_move(self, move):
-        """تنفيذ حركة الحاسوب"""
+        """تنفيذ حركة الذكي الاصطناعي (Stockfish أو عشوائي)"""
         if self.game_result is not None or self.paused:
             return
             
         self.board.push(move)
-        self.save_move_to_history(move)  # حفظ في التاريخ
+        self.save_move_to_history(move)
         self.ai_thinking = False
         self.check_game_status()
         self.draw_enhanced_board()
@@ -1758,9 +2294,13 @@ Alt + F4        خروج من البرنامج
             if self.board.is_check():
                 turn_text += " - كش! ⚠️"
                 
-            mode_text = "لاعب ضد لاعب" if self.game_mode == "1vs1" else "لاعب ضد الحاسوب"
+            if self.game_mode == "1vs1":
+                mode_text = "لاعب ضد لاعب"
+            else:
+                engine_text = "Stockfish" if self.stockfish_enabled else "حاسوب عادي"
+                mode_text = f"لاعب ضد {engine_text}"
+                
             full_text = f"{turn_text} - الوضع: {mode_text}"
-            
             self.status_label.config(text=full_text, fg="#ECEFF4")
         
         if self.moves_count_label:
@@ -1790,6 +2330,15 @@ Alt + F4        خروج من البرنامج
             else:
                 self.position_label.config(text="الموقع: الحالي")
         
+        # تحديث حالة المحرك
+        if self.engine_status_label:
+            status_text = "🤖 متصل" if self.stockfish_enabled else "🤖 غير متصل"
+            status_color = "#A3BE8C" if self.stockfish_enabled else "#BF616A"
+            if self.stockfish_enabled:
+                level_info = f" (مستوى {self.stockfish_skill_level})" if self.use_skill_level else f" (ELO {self.stockfish_elo})"
+                status_text += level_info
+            self.engine_status_label.config(text=status_text, fg=status_color)
+        
     def update_pgn_display(self):
         """تحديث عرض تدوين PGN"""
         if not self.pgn_text:
@@ -1797,16 +2346,35 @@ Alt + F4        خروج من البرنامج
             
         try:
             game = chess.pgn.Game.from_board(self.board)
-            game.headers["Event"] = "مباراة احترافية"
+            game.headers["Event"] = "مباراة احترافية مع Stockfish"
             game.headers["Date"] = time.strftime("%Y.%m.%d")
             game.headers["White"] = "اللاعب الأبيض"
-            game.headers["Black"] = "اللاعب الأسود" if self.game_mode == "1vs1" else "الحاسوب"
+            
+            if self.game_mode == "1vs1":
+                game.headers["Black"] = "اللاعب الأسود"
+            else:
+                if self.stockfish_enabled:
+                    level_info = f"Stockfish (مستوى {self.stockfish_skill_level})" if self.use_skill_level else f"Stockfish (ELO {self.stockfish_elo})"
+                    game.headers["Black"] = level_info
+                else:
+                    game.headers["Black"] = "الحاسوب"
             
             pgn_string = str(game)
             
             # إضافة معلومات التنقل إذا كان في وضع المراجعة
             if self.in_review_mode:
                 pgn_string += f"\n\n[وضع المراجعة - الحركة {self.current_position}/{len(self.move_history)}]"
+            
+            # إضافة تقييم Stockfish إذا كان متاحاً
+            if self.stockfish_enabled and not self.in_review_mode and self.game_result is None:
+                evaluation = self.get_stockfish_evaluation()
+                if evaluation is not None:
+                    if abs(evaluation) > 9000:  # مات
+                        mate_in = (10000 - abs(evaluation)) if evaluation > 0 else -(10000 - abs(evaluation))
+                        eval_text = f"مات في {abs(mate_in)} {'للأبيض' if mate_in > 0 else 'للأسود'}"
+                    else:
+                        eval_text = f"تقييم: {evaluation/100:+.1f}"
+                    pgn_string += f"\n\n[{eval_text}]"
             
             self.pgn_text.delete(1.0, tk.END)
             self.pgn_text.insert(1.0, pgn_string)
@@ -1819,10 +2387,21 @@ Alt + F4        خروج من البرنامج
         if self.board.is_checkmate():
             winner = "🏆 الأسود" if self.board.turn else "🏆 الأبيض"
             self.game_result = "كش مات"
+            
+            # رسالة خاصة للفوز ضد Stockfish
+            if self.game_mode == "1vsAI" and self.stockfish_enabled:
+                if winner == "🏆 الأبيض":
+                    extra_msg = f"🎉 مبروك! لقد هزمت Stockfish مستوى {self.stockfish_skill_level if self.use_skill_level else self.stockfish_elo}!"
+                else:
+                    extra_msg = f"💪 Stockfish فاز هذه المرة، حاول مرة أخرى!"
+            else:
+                extra_msg = ""
+            
             messagebox.showinfo(
                 "🎉 انتهت اللعبة!", 
                 f"✨ كش مات! فاز {winner} ✨\n\n"
-                f"🎯 تهانينا على المباراة الرائعة!\n\n"
+                f"🎯 تهانينا على المباراة الرائعة!\n"
+                f"{extra_msg}\n\n"
                 f"💡 يمكنك الآن استخدام الأسهم لمراجعة المباراة!"
             )
         elif self.board.is_stalemate():
@@ -1860,7 +2439,13 @@ Alt + F4        خروج من البرنامج
             
         self.update_status()
         self.update_pgn_display()
-        messagebox.showinfo("✨ لعبة جديدة!", "🎮 تم بدء مباراة جديدة بنجاح!")
+        
+        engine_msg = ""
+        if self.game_mode == "1vsAI" and self.stockfish_enabled:
+            level_info = f"مستوى {self.stockfish_skill_level}" if self.use_skill_level else f"ELO {self.stockfish_elo}"
+            engine_msg = f"\n🤖 ستلعب ضد Stockfish {level_info}"
+        
+        messagebox.showinfo("✨ لعبة جديدة!", f"🎮 تم بدء مباراة جديدة بنجاح!{engine_msg}")
     
     def undo_move(self):
         """التراجع عن آخر حركة"""
@@ -1882,7 +2467,7 @@ Alt + F4        خروج من البرنامج
             
         moves_to_undo = 1
         if self.game_mode == "1vsAI" and len(self.move_history) >= 2:
-            moves_to_undo = 2
+            moves_to_undo = 2  # إلغاء حركة اللاعب وحركة الكمبيوتر
             
         for _ in range(moves_to_undo):
             if self.move_history:
@@ -1916,10 +2501,18 @@ Alt + F4        خروج من البرنامج
         if filename:
             try:
                 game = chess.pgn.Game.from_board(self.board)
-                game.headers["Event"] = "مباراة احترافية"
+                game.headers["Event"] = "مباراة احترافية مع Stockfish"
                 game.headers["Date"] = time.strftime("%Y.%m.%d")
                 game.headers["White"] = "اللاعب الأبيض"
-                game.headers["Black"] = "اللاعب الأسود" if self.game_mode == "1vs1" else "الحاسوب"
+                
+                if self.game_mode == "1vs1":
+                    game.headers["Black"] = "اللاعب الأسود"
+                else:
+                    if self.stockfish_enabled:
+                        level_info = f"Stockfish (مستوى {self.stockfish_skill_level})" if self.use_skill_level else f"Stockfish (ELO {self.stockfish_elo})"
+                        game.headers["Black"] = level_info
+                    else:
+                        game.headers["Black"] = "الحاسوب"
                 
                 if self.game_result == "كش مات":
                     game.headers["Result"] = "0-1" if self.board.turn else "1-0"
@@ -2029,19 +2622,49 @@ Alt + F4        خروج من البرنامج
         self.board_orientation_label = None
         self.pgn_text = None
         self.position_label = None
+        self.engine_status_label = None
         
         self.create_start_screen()
     
     def run(self):
         """تشغيل اللعبة الاحترافية"""
         try:
+            self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
             self.window.mainloop()
         except Exception as e:
             messagebox.showerror("خطأ في النظام", f"حدث خطأ غير متوقع:\n{str(e)}")
+        finally:
+            self.close_stockfish()
+
+    def on_closing(self):
+        """التعامل مع إغلاق النافذة"""
+        if len(self.move_history) > 0 and self.game_result is None:
+            result = messagebox.askyesnocancel(
+                "❌ تأكيد الخروج",
+                "هل تريد حفظ المباراة الحالية قبل الخروج؟"
+            )
+            if result is True:
+                if self.save_pgn():
+                    self.close_stockfish()
+                    self.window.destroy()
+            elif result is False:
+                self.close_stockfish()
+                self.window.destroy()
+        else:
+            self.close_stockfish()
+            self.window.destroy()
 
 # تشغيل البرنامج
 if __name__ == "__main__":
     try:
+        # التحقق من المتطلبات
+        try:
+            import chess.engine
+            print("✅ تم العثور على python-chess")
+        except ImportError:
+            print("❌ يرجى تثبيت python-chess: pip install python-chess")
+            exit(1)
+            
         game = ProfessionalChessGame()
         game.run()
     except Exception as e:
